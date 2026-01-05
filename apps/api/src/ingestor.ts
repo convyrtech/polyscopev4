@@ -458,26 +458,28 @@ export class PolymarketIngestor {
         // Fallback or "clobTokenIds" format
         if (m.clobTokenIds) {
             const ids = (typeof m.clobTokenIds === 'string') ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+
+            // [FIX] Try to resolve outcomes from m.outcomes
+            let outcomes: string[] = [];
+            if (m.outcomes) {
+                try {
+                    outcomes = (typeof m.outcomes === 'string') ? JSON.parse(m.outcomes) : m.outcomes;
+                } catch (e) { /* ignore */ }
+            }
+
             if (Array.isArray(ids) && ids.length > 0) {
-                // Try to map tokens if they exist in `tokens` array
-                // If not, we have to guess or wait. 
-                // Usually for Yes/No, index 0 is Long (Yes)? No, actually depends on market type.
-                // Let's rely on the 'tokens' array if present for outcome mapping.
-
-                // If we have parsed tokens previously in `processMarketData` via `tokens` we are good.
-                // But valid markets *should* have `tokens` array. 
-
-                // If we ONLY have ids, we might leave outcome UNK, but usually `tokens` is better.
-                // For safety alongside refresh:
-                ids.forEach((assetId: string) => {
+                ids.forEach((assetId: string, index: number) => {
                     // Only set if not already set by better logic
                     if (!this.marketCache.has(assetId)) {
+                        // [FIX] Use mapped outcome if available, else UNK
+                        // Usually clobTokenIds maps 1:1 to outcomes
+                        const mappedOutcome = outcomes[index] || 'UNK';
+
                         this.marketCache.set(assetId, {
                             slug: m.slug,
                             question: m.question,
                             conditionId: m.conditionId,
-                            conditionId: m.conditionId,
-                            outcome: 'UNK', // Pending better mapping
+                            outcome: mappedOutcome,
                             expiryDate: m.end_date_iso ? new Date(m.end_date_iso) : undefined,
                             volume: Number(m.volume || 0)
                         });
