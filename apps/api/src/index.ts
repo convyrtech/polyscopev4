@@ -55,30 +55,36 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
   const slug = c.req.param('slug');
 
   try {
+    // 1. Resolve Target Slugs (Event -> [Market1, Market2])
+    // If it's a direct market slug, this returns [slug].
+    // If it's an event, this returns [market1, market2...].
+    // NOTE: If we haven't tracked it yet, this might return [slug] initially, 
+    // but trackNewMarket will populate the map shortly after.
+    let relatedSlugs = ingestor.getRelatedSlugs(slug);
+
     // [NEW] On-Demand Tracking Check
     if (!ingestor.isTracking(slug)) {
-      // If we have 0 signals for this market in DB, it might be new.
-      // But checking Ingestor memory is faster.
-      // Trigger Tracking
-      ingestor.trackNewMarket(slug).catch(e => console.error("Tracking Error", e));
+      // Trigger Discovery & Backfill
+      // logical race condition: trackNewMarket is async.
+      // We will kick it off. The first request might still be empty or partial.
+      // But the map will update for subsequent requests (poll interval 1s).
+      await ingestor.trackNewMarket(slug).catch(e => console.error("Tracking Error", e));
 
-      // Return Initializing (unless we have historic DB data? Let's assume we want fresh stream)
-      // Check DB just in case we have stale data
-      const count = await prisma.signal.count({ where: { marketSlug: slug } });
-      if (count === 0) {
-        return c.json({ status: "INITIALIZING" });
-      }
+      // Refresh related slugs after tracking (if possible)
+      relatedSlugs = ingestor.getRelatedSlugs(slug);
     }
+
+    // Safety: Ensure we have at least the requested slug to avoid empty IN clause
+    if (relatedSlugs.length === 0) relatedSlugs = [slug];
 
     // Bullish: BUY "Yes" or SELL "No"
     const bullish = await prisma.signal.aggregate({
       _sum: { amountUSD: true },
       where: {
-        marketSlug: slug,
+        marketSlug: { in: relatedSlugs },
         OR: [
           { side: 'BUY', outcome: 'Yes' },
-          { side: 'SELL', outcome: 'No' },
-          // Also map "Long" logic if needed, but Polymarket is usually Binary
+          { side: 'SELL', outcome: 'No' }
         ]
       }
     });
@@ -87,7 +93,7 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     const bearish = await prisma.signal.aggregate({
       _sum: { amountUSD: true },
       where: {
-        marketSlug: slug,
+        marketSlug: { in: relatedSlugs },
         OR: [
           { side: 'BUY', outcome: 'No' },
           { side: 'SELL', outcome: 'Yes' }
@@ -97,20 +103,20 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
 
     // Active Whales
     const whales = await prisma.signal.findMany({
-      where: { marketSlug: slug },
+      where: { marketSlug: { in: relatedSlugs } },
       distinct: ['whaleAddress'],
       select: { whaleAddress: true }
     });
 
     // Get Latest Signal for AI Context
     const latestSignal = await prisma.signal.findFirst({
-      where: { marketSlug: slug },
+      where: { marketSlug: { in: relatedSlugs } },
       orderBy: { timestamp: 'desc' }
     });
 
     // [NEW] History for Sparkline
     const historySignals = await prisma.signal.findMany({
-      where: { marketSlug: slug },
+      where: { marketSlug: { in: relatedSlugs } },
       orderBy: { timestamp: 'desc' },
       take: 20,
       select: {
@@ -131,7 +137,7 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     // [NEW] Top 5 Active Whales (The Roster)
     const topWhalesGroup = await prisma.signal.groupBy({
       by: ['whaleAddress'],
-      where: { marketSlug: slug },
+      where: { marketSlug: { in: relatedSlugs } },
       _sum: { amountUSD: true },
       orderBy: { _sum: { amountUSD: 'desc' } },
       take: 5

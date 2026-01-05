@@ -250,7 +250,7 @@ export class PolymarketIngestor {
         const size = Number(trade.size);
         const volumeUSD = price * size;
 
-        if (volumeUSD < 10) return; // Filter noise (Lowered to $10 for verification)
+        if (volumeUSD < 0) return; // Filter noise (Lowered to $0 for verification)
         console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${trade.asset}`);
 
         // Resolve Metadata
@@ -496,8 +496,51 @@ export class PolymarketIngestor {
         for (const val of this.marketCache.values()) {
             if (val.slug === slug) return true;
         }
+        // [NEW] Event-level check
+        // If the slug matches an Event, we might not have it as a direct key, 
+        // but we might need to know if we track markets FOR this event?
+        // Actually, if we track markets for an event, we don't store the event slug directly in the value object.
+        // We only store the market `slug`.
+        // So this check might return FALSE for an Event Slug, triggering `trackNewMarket`.
+        // This is actually GOOD behavior (it triggers discovery).
         return false;
     }
+
+    // [NEW] Helper to map Event Slug -> [Market Slug 1, Market Slug 2]
+    public getRelatedSlugs(querySlug: string): string[] {
+        const related: Set<string> = new Set();
+
+        // 1. Exact Match (Direct Market)
+        related.add(querySlug);
+
+        // 2. Scan Cache for potential matches (Naive approach or need explicit mapping?)
+        // The Cache stores { slug: "market-slug" }. It does NOT store "event-slug".
+        // However, `trackNewMarket` fetches event markets. 
+        // We need a way to store "Event -> Markets" mapping?
+        // Or we just return all cached slugs that *contain* the query string? (Too loose).
+
+        // BETTER: When `trackNewMarket` runs for an Event, it should store the Event->Market mapping.
+        // But for now, let's just rely on the DB having data.
+
+        // Wait, if we return [querySlug], and the DB has no rows for querySlug, but rows for related markets...
+        // We need the method to return those related market slugs.
+
+        // CRITICAL: We need to know which markets belong to this event.
+        // We can't know this from `marketCache` easily unless `marketCache` stores `eventSlug`.
+        // Gamma `processMarketData` receives `m`. Does `m` have `event_slug`? 
+        // Let's check `processMarketData`. It doesn't seemingly use event slug.
+
+        // HOTFIX: For now, we will return just the slug. 
+        // BUT, we will update `trackNewMarket` to RETURN the list of discovered slugs.
+        // Converting this function to just return `[querySlug]` is useless.
+        // We need to change `index.ts` to query Gamma? No, too slow.
+
+        // Let's rely on `Ingestor` having a new Map `eventMap: Map<string, string[]>` (Event -> MarketSlugs).
+        return this.eventMap.get(querySlug) || [querySlug];
+    }
+
+    // [NEW] Map to track Event -> Markets relationships
+    private eventMap: Map<string, string[]> = new Map();
 
     public async trackNewMarket(slug: string) {
         console.log(`🚀 [Ingestor] On-Demand Tracking Request: ${slug}`);
@@ -546,6 +589,9 @@ export class PolymarketIngestor {
             // 2. Add to Cache & Subscribe
             const newAssetIds: string[] = [];
 
+            // [NEW] Collect market slugs for this event
+            const discoveredMarketSlugs: Set<string> = new Set();
+
             for (const m of marketsToTrack) {
                 // Determine Asset IDs (clobTokenIds or tokens)
                 if (m.clobTokenIds) {
@@ -556,11 +602,24 @@ export class PolymarketIngestor {
                 }
                 // Process Metadata
                 this.processMarketData(m);
+                if (m.slug) discoveredMarketSlugs.add(m.slug);
+            }
+
+            // [NEW] Update Event Map
+            if (discoveredMarketSlugs.size > 0) {
+                const existing = this.eventMap.get(slug) || [];
+                // Merge and dedup
+                const combined = Array.from(new Set([...existing, ...discoveredMarketSlugs]));
+                this.eventMap.set(slug, combined);
+                console.log(`🗺️ [Ingestor] Mapped Event '${slug}' to ${combined.length} markets.`);
             }
 
             // [NEW] Historical Backfill
             // Check if we already have sufficient data to skip backfill
-            const count = await prisma.signal.count({ where: { marketSlug: slug } });
+            // Note: We should check count for ANY of the markets, or the event as a whole?
+            // Let's check Total Count for all related markets.
+            const allSlugs = Array.from(discoveredMarketSlugs);
+            const count = allSlugs.length > 0 ? await prisma.signal.count({ where: { marketSlug: { in: allSlugs } } }) : 0;
 
             if (count < 50 && newAssetIds.length > 0) {
                 console.log(`📜 [Ingestor] Backfilling History for ${slug} (Found ${count} signals, target 50+)...`);

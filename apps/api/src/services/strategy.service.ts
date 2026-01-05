@@ -49,29 +49,35 @@ export class StrategyService {
         }
 
         // =====================================================================
-        // 🇻🇪 STEP 2: THE VENEZUELA PROTOCOL (Fresh Wallet Bypass)
+        // 📡 STEP 2: INSIDER RADAR (PolySights Rival)
         // =====================================================================
-        // Logic: New/Virgin Wallet + Large Bet ($1000+) = INSIDER INFO.
-        // We bypass Liquidity/Price checks for this.
+        // Calculate "Radar Score" (0-100) based on Freshness, Conviction, Timing.
 
-        const isFreshWallet = (whale.winrate === 0 && whale.pnl === 0); // No history
-        const isLargeBet = signal.amountUSD >= 1000;
+        const radarScore = this.calculateRadarScore(signal, whale);
 
-        if (isFreshWallet && isLargeBet) {
-            // 🚀 BYPASS: The "Ghost Insider"
-            // Assuming they know something we don't.
+        if (radarScore >= 80) {
             return {
                 strategy: StrategyType.INSIDER,
                 action: 'BET',
-                confidence: 0.95, // Max Confidence
-                reason: 'VENEZUELA PROTOCOL: Fresh Wallet Big Bet'
+                confidence: 0.95, // High Confidence Insider
+                reason: `RADAR SCORE: ${radarScore} (Detected High Conviction Insider)`
+            };
+        }
+
+        if (radarScore >= 60) {
+            return {
+                strategy: StrategyType.INSIDER,
+                action: 'BET',
+                confidence: 0.75, // Moderate Confidence
+                reason: `RADAR SCORE: ${radarScore} (Possible Insider Activity)`
             };
         }
 
         // =====================================================================
         // 🛡️ STEP 3: REALITY FILTERS (Liquidity & Time)
         // =====================================================================
-        // Only apply these to standard trades (non-Venezuela).
+        // Only apply these to standard trades (non-Insider).
+        // Insiders bypass these checks (they know something).
 
         // 2. Time Horizon: Max 7 Days (Don't lock capital)
         if (signal.expiryDate) {
@@ -98,11 +104,10 @@ export class StrategyService {
         }
 
         // =====================================================================
-        // 🎯 STEP 4: STRATEGY MATCHING
+        // 🎯 STEP 4: STRATEGY MATCHING (Legacy / Sniper)
         // =====================================================================
 
         const isCrypto = lowerCat.includes('crypto') || lowerCat.includes('bitcoin') || lowerCat.includes('ethereum');
-        const isPolitics = lowerCat.includes('politics') || lowerCat.includes('election');
 
         // 🔫 SNIPER (Crypto Specialist)
         // Logic: Whale Winrate > 55% & PnL > 1000.
@@ -116,25 +121,55 @@ export class StrategyService {
             return { strategy: StrategyType.SNIPER, action: 'BET', confidence, reason: 'Sniper Stats' };
         }
 
-        // 👻 INSIDER (Politics Specialist)
-        // Logic: Bet > $2000 & Price < 0.40 (Adjusted from 0.20 since floor is 0.20).
-        // Boost: Politics & Amount > 1000 -> 90%.
-
-        const isPoliticsInsider = isPolitics && signal.amountUSD > 1000;
-
-        if (isPoliticsInsider) {
-            return { strategy: StrategyType.INSIDER, action: 'BET', confidence: 0.90, reason: 'Politics Insider' };
-        }
-
-        if (signal.amountUSD > 2000) {
-            // Generic Insider
-            return { strategy: StrategyType.INSIDER, action: 'BET', confidence: 0.75, reason: 'Large Whale Bet' };
-        }
-
-        // 🌊 TREND
-        // Placeholder
-
         // Default
         return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'No Strategy Matched' };
+    }
+
+    /**
+     * Calculates the "Insider Radar" score (0-100).
+     * Mimics PolySights logic: Freshness + Conviction + Timing.
+     */
+    private calculateRadarScore(signal: SignalCandidate, whale: Whale): number {
+        let score = 0;
+
+        // 1. FRESHNESS (Max 40)
+        // Is this a "Burner Wallet"? (0 wins, 0 pnl, 0 volume before this?)
+        // Note: Ingestor might have just created it with current volume, so check previous stats if possible.
+        // For simplicity: if winrate is 0 and pnl is 0, it's unproven/fresh.
+        const isFresh = (whale.winrate === 0 && whale.pnl === 0);
+        if (isFresh) {
+            score += 40;
+        }
+
+        // 2. CONVICTION (Max 40)
+        // How much money are they risking?
+        const amount = signal.amountUSD;
+        if (amount >= 5000) {
+            score += 40; // High Conviction
+        } else if (amount >= 2000) {
+            score += 30;
+        } else if (amount >= 1000) {
+            score += 20;
+        } else if (amount >= 500) {
+            score += 10;
+        }
+
+        // 3. TIMING (Max 20)
+        // Are they early? (Low Market Volume)
+        // If market volume is low (< $50k), big bets act as signals.
+        const marketVol = signal.marketVolume || 0;
+        if (marketVol < 100000) {
+            score += 20; // Early Logic
+        } else if (marketVol < 500000) {
+            score += 10;
+        }
+
+        // Special Case: "The Venezuela Pattern" (Fresh + >$1k)
+        // 40 (Fresh) + 20 (Conviction) = 60 (Minimum threshold met)
+
+        // Special Case: "The Leviathan" (Fresh + >$5k + Early)
+        // 40 + 40 + 20 = 100 (Perfect Score)
+
+        return score;
     }
 }
