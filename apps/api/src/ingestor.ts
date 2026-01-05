@@ -231,27 +231,12 @@ export class PolymarketIngestor {
         const uniqueId = trade.id || trade.transactionHash || trade.match_id;
         if (!uniqueId || this.processedTradeIds.has(uniqueId)) return;
 
-        // Mark as seen
-        this.processedTradeIds.add(uniqueId);
-
-        // [MEMORY PROTECTION] Garbage Collection
-        // Prevent memory leak on small VPS (1GB RAM)
-        if (this.processedTradeIds.size > 50000) {
-            // Clear entire set every ~50k trades. 
-            // Better strategy: delete oldest? Set handles insertion order.
-            // For simplicity and perf: clear half or just clear all occasionally.
-            // Clearing all risks duplicates for a split second, but safe enough.
-            this.processedTradeIds.clear();
-            this.processedTradeIds.add(uniqueId);
-        }
-
         // Filter: Must be worth analyzing
         const price = Number(trade.price);
         const size = Number(trade.size);
         const volumeUSD = price * size;
 
-        if (volumeUSD < 0) return; // Filter noise (Lowered to $0 for verification)
-        console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${trade.asset}`);
+        if (volumeUSD < 0) return; // Filter noise
 
         // Resolve Metadata
         const assetId = trade.asset_id || trade.asset; // Handle both
@@ -259,17 +244,32 @@ export class PolymarketIngestor {
 
         // FIX 3: Lazy Load if missing
         if (!metadata) {
-            console.warn(`⚠️ Metadata Miss for ${assetId} (Cache Size: ${this.marketCache.size})`);
-            console.log(`🔍 [Stream B] Unknown Asset ${assetId}, attempting lazy load...`);
+            // console.log(`🔍 [Stream B] Unknown Asset ${assetId}, attempting lazy load...`);
             try {
                 metadata = await this.fetchMarketDetails(assetId);
-            } catch (e) { console.error("Lazy Load Failed", e); return; }
+            } catch (e) { }
         }
 
-        // If still missing even after lazy load, fallback (but should be rare now)
-        const marketSlug = metadata?.slug || 'unknown-market';
-        const conditionId = metadata?.conditionId || assetId;
-        const outcome = metadata?.outcome || 'UNK'; // FIX 2: Use cached outcome
+        // [CRITICAL FIX] If still missing, DO NOT PROCESS. 
+        // Do not mark as processed. Let Backfill handle it when cache is warm.
+        if (!metadata || !metadata.slug) {
+            return;
+        }
+
+        // Mark as seen ONLY if we are actually processing it
+        this.processedTradeIds.add(uniqueId);
+
+        // [MEMORY PROTECTION] Garbage Collection
+        if (this.processedTradeIds.size > 50000) {
+            this.processedTradeIds.clear();
+            this.processedTradeIds.add(uniqueId);
+        }
+
+        // console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${metadata.slug}`);
+
+        const marketSlug = metadata.slug;
+        const conditionId = metadata.conditionId || assetId;
+        const outcome = metadata.outcome || 'UNK';
 
         // 1. Identify Maker
         // API returns "owner" or "proxyWallet" sometimes? 
