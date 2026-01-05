@@ -1,0 +1,15 @@
+node_modules
+.turbo
+.next
+dist
+.env
+.DS_Store
+
+# Heavy Data
+docker-data/
+apps/extension/.plasmo/
+apps/extension/build/
+
+# Logs
+*.log
+npm-debug.log*

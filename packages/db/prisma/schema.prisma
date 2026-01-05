@@ -1,0 +1,84 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. App Users (Subscribers)
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  
+  // Relations
+  watchlist Watchlist[]
+}
+
+// 2. Polymarket Whales (The "Insiders")
+model Whale {
+  address   String   @id // Wallet Address
+  alias     String?  // "TrumpWhale", etc.
+  
+  // Stats (Updated via Aggregation)
+  winrate   Float    @default(0)
+  pnl       Float    @default(0)
+  volume    Float    @default(0)
+  score     Float    @default(0) // "Whale Score"
+  lastActive DateTime @default(now()) // To filter out dead wallets
+  lastAnalyzed DateTime @default(now()) // Cache invalidation logic
+  
+  // Tags
+  tags      String   @default("") // Comma-separated: "Smart,Insider,HighRoller"
+
+  // Relations
+  signals   Signal[]
+  followers Watchlist[]
+}
+
+// 3. Signals (Trades/Bets)
+model Signal {
+  id              String   @id @default(cuid()) // or txHash
+  txHash          String   @unique
+  timestamp       DateTime
+  
+  // Market Info
+  marketSlug      String
+  conditionId     String
+  outcome         String   // "Yes" / "No"
+  
+  // Trade Info
+  side            String   // "BUY" / "SELL"
+  price           Float
+  amountUSD       Float
+  
+  // Analysis
+  status          String   @default("OPEN") // OPEN, WON, LOST
+  aiScore         Float    @default(0)      // Algo confidence
+  roi             Float?                    // Final result %
+  isShadow        Boolean  @default(false)  // If true, it was a "Shadow Bet" simulation
+  tags            String   @default("")     // Classification tags (SMART_ENTRY, FOMO, etc.)
+  strategyName    String?                   // e.g. "SNIPER", "INSIDER"
+  betAmount       Float?                    // Calculated bet size in USD
+  
+  // Relations
+  whaleAddress    String
+  whale           Whale    @relation(fields: [whaleAddress], references: [address])
+
+  @@index([marketSlug])
+  @@index([timestamp])
+}
+
+// 4. Watchlist (User -> Whale)
+model Watchlist {
+  userId       String
+  whaleAddress String
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id])
+  whale        Whale    @relation(fields: [whaleAddress], references: [address])
+
+  @@id([userId, whaleAddress])
+}

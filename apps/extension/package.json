@@ -1,0 +1,38 @@
+{
+    "name": "extension",
+    "displayName": "WhaleScope X-Ray",
+    "version": "0.0.1",
+    "description": "Polymarket Whale Analysis Overlay",
+    "scripts": {
+        "dev": "plasmo dev",
+        "build": "plasmo build",
+        "package": "plasmo package"
+    },
+    "dependencies": {
+        "plasmo": "0.84.0",
+        "react": "18.2.0",
+        "react-dom": "18.2.0",
+        "recharts": "^3.6.0"
+    },
+    "devDependencies": {
+        "@types/node": "20.11.5",
+        "@types/react": "18.2.48",
+        "@types/react-dom": "18.2.18",
+        "@whalescope/tsconfig": "workspace:*",
+        "autoprefixer": "^10.4.17",
+        "postcss": "^8.1.0",
+        "tailwindcss": "^3.4.1",
+        "typescript": "5.3.3"
+    },
+    "manifest": {
+        "permissions": [
+            "tabs",
+            "storage",
+            "activeTab"
+        ],
+        "host_permissions": [
+            "https://polymarket.com/*",
+            "http://87.120.186.161:3001/*"
+        ]
+    }
+}

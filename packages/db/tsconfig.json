@@ -1,0 +1,10 @@
+{
+    "extends": "@whalescope/tsconfig/base.json",
+    "compilerOptions": {
+        "lib": [
+            "ES2015"
+        ],
+        "module": "commonjs",
+        "target": "ES2015"
+    }
+}

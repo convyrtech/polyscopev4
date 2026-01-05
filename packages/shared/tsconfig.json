@@ -1,0 +1,6 @@
+{
+    "extends": "@whalescope/tsconfig/base.json",
+    "include": [
+        "**/*.ts"
+    ]
+}

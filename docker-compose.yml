@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: whalescope_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: whale
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: whalescope
+    volumes:
+      - ./docker-data/postgres:/var/lib/postgresql/data
+    restart: always

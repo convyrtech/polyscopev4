@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal reset for extension overlay to avoid leaking site styles */
+#plasmo-shadow-container {
+    z-index: 2147483647;
+}
