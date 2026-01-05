@@ -13,20 +13,17 @@ async function main() {
 
     // 2. Signals by Outcome (Check for UNK)
     const byOutcome = await prisma.signal.groupBy({
-        by: ['outcome'],
+        by: ['outcome', 'marketSlug'],
         _count: true
     });
-    console.log("\n📈 By Outcome:");
-    byOutcome.forEach(g => console.log(`   - ${g.outcome}: ${g._count}`));
+    console.log("\n📈 By Outcome & Slug:");
+    byOutcome.forEach(g => console.log(`   - ${g.marketSlug} [${g.outcome}]: ${g._count}`));
 
-    // 3. Recent Activity (Last 1 hour)
-    const recent = await prisma.signal.count({
-        where: {
-            createdAt: {
-                gt: new Date(Date.now() - 60 * 60 * 1000)
-            }
+    where: {
+        timestamp: {
+            gt: new Date(Date.now() - 60 * 60 * 1000)
         }
-    });
+    }
     console.log(`\n⏱️ Signals created in last 1h: ${recent}`);
 
     // 4. Sample Signal (if any)
