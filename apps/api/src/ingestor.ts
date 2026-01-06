@@ -250,13 +250,25 @@ export class PolymarketIngestor {
             } catch (e) { }
         }
 
-        // [CRITICAL FIX] If still missing, DO NOT PROCESS. 
-        // Do not mark as processed. Let Backfill handle it when cache is warm.
+        // [DATA INTEGRITY FIX] Use PENDING state instead of Drop
+        let marketSlug = 'pending_resolution';
+        let conditionId = 'pending';
+        let outcome = 'UNK';
+        let title = 'Pending Metadata...';
+
         if (!metadata || !metadata.slug) {
-            return;
+            // Triger Force Track for this unknown asset to heal self eventually
+            // We can't query trackNewMarket with assetId easily but we can try reverse lookup next time
+            // For now, save as pending so we don't lose the volume.
+            // console.warn(`⚠️ Keeping trade for ${assetId} as PENDING`);
+        } else {
+            marketSlug = metadata.slug;
+            conditionId = metadata.conditionId || assetId;
+            outcome = metadata.outcome || 'UNK';
+            title = metadata.question;
         }
 
-        // Mark as seen ONLY if we are actually processing it
+        // Mark as seen (We process EVERYTHING now)
         this.processedTradeIds.add(uniqueId);
 
         // [MEMORY PROTECTION] Garbage Collection
@@ -265,11 +277,7 @@ export class PolymarketIngestor {
             this.processedTradeIds.add(uniqueId);
         }
 
-        // console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${metadata.slug}`);
-
-        const marketSlug = metadata.slug;
-        const conditionId = metadata.conditionId || assetId;
-        const outcome = metadata.outcome || 'UNK';
+        // console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${marketSlug}`);
 
         // 1. Identify Maker
         // API returns "owner" or "proxyWallet" sometimes? 
@@ -317,7 +325,7 @@ export class PolymarketIngestor {
                 amountUSD: volumeUSD,
                 marketSlug: marketSlug,
                 category: metadata?.description, // Assuming description might contain category or we rely on slug/title
-                title: metadata?.question,
+                title: title,
                 outcome: outcome,
                 expiryDate: metadata?.expiryDate,
                 marketVolume: metadata?.volume
@@ -555,6 +563,7 @@ export class PolymarketIngestor {
 
             // Try Event Endpoint first (most common for "slugs" in URL)
             let marketsToTrack: any[] = [];
+            let isEvent = false;
 
             try {
                 const eventRes = await axios.get(`https://gamma-api.polymarket.com/events`, {
@@ -565,6 +574,7 @@ export class PolymarketIngestor {
                     const event = eventRes.data[0];
                     if (event.markets && Array.isArray(event.markets)) {
                         marketsToTrack = event.markets;
+                        isEvent = true;
                     }
                 }
             } catch (e) {
@@ -591,7 +601,6 @@ export class PolymarketIngestor {
 
             // 2. Add to Cache & Subscribe
             const newAssetIds: string[] = [];
-
             // [NEW] Collect market slugs for this event
             const discoveredMarketSlugs: Set<string> = new Set();
 
@@ -614,7 +623,7 @@ export class PolymarketIngestor {
                 // Merge and dedup
                 const combined = Array.from(new Set([...existing, ...discoveredMarketSlugs]));
                 this.eventMap.set(slug, combined);
-                console.log(`🗺️ [Ingestor] Mapped Event '${slug}' to ${combined.length} markets.`);
+                console.log(`🗺️ [Ingestor] Mapped '${slug}' (${isEvent ? 'Event' : 'Market'}) to ${combined.length} markets:`, combined);
             }
 
             // [NEW] Historical Backfill

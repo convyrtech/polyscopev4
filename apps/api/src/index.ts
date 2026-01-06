@@ -56,11 +56,16 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
 
   try {
     // 1. Resolve Target Slugs (Event -> [Market1, Market2])
-    // If it's a direct market slug, this returns [slug].
-    // If it's an event, this returns [market1, market2...].
-    // NOTE: If we haven't tracked it yet, this might return [slug] initially, 
-    // but trackNewMarket will populate the map shortly after.
     let relatedSlugs = ingestor.getRelatedSlugs(slug);
+
+    // [FIX] Sync Check: If single slug (unmapped), force track to discover potential children
+    if (relatedSlugs.length === 1 && relatedSlugs[0] === slug) {
+      if (!ingestor.isTracking(slug)) {
+        await ingestor.trackNewMarket(slug).catch(e => console.error("Tracking Error", e));
+        // Re-fetch after tracking
+        relatedSlugs = ingestor.getRelatedSlugs(slug);
+      }
+    }
 
     // [NEW] On-Demand Tracking Check
     if (!ingestor.isTracking(slug)) {
