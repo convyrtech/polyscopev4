@@ -82,36 +82,47 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     // Safety: Ensure we have at least the requested slug to avoid empty IN clause
     if (relatedSlugs.length === 0) relatedSlugs = [slug];
 
-    // Bullish: BUY "Yes" or SELL "No"
-    const bullish = await prisma.signal.aggregate({
-      _sum: { amountUSD: true },
-      where: {
-        marketSlug: { in: relatedSlugs },
-        OR: [
-          { side: 'BUY', outcome: 'Yes' },
-          { side: 'SELL', outcome: 'No' }
-        ]
-      }
-    });
-
-    // Bearish: BUY "No" or SELL "Yes"
-    const bearish = await prisma.signal.aggregate({
-      _sum: { amountUSD: true },
-      where: {
-        marketSlug: { in: relatedSlugs },
-        OR: [
-          { side: 'BUY', outcome: 'No' },
-          { side: 'SELL', outcome: 'Yes' }
-        ]
-      }
-    });
-
-    // Active Whales
-    const whales = await prisma.signal.findMany({
+    // Optimized: Fetch ALL signals once and aggregate in memory
+    const signals = await prisma.signal.findMany({
       where: { marketSlug: { in: relatedSlugs } },
-      distinct: ['whaleAddress'],
-      select: { whaleAddress: true }
+      select: { amountUSD: true, side: true, outcome: true, whaleAddress: true }
     });
+
+    const result = {
+      market: slug,
+      bullishVolume: 0,
+      bearishVolume: 0,
+      neutralVolume: 0,
+      whaleCount: 0,
+      activeWhales: [] as any[],
+      latestAiScore: 0,
+      latestPattern: "",
+      latestSide: "N/A",
+      latestOutcome: "N/A",
+      lastTradeTime: null as any,
+      history: [] as any[]
+    };
+
+    const whalesSet = new Set<string>();
+
+    for (const s of signals) {
+      const outcome = s.outcome || 'UNK';
+
+      // Volume Logic
+      if (s.outcome === 'Yes') {
+        if (s.side === 'BUY') result.bullishVolume += s.amountUSD;
+        else result.bearishVolume += s.amountUSD;
+      } else if (s.outcome === 'No') {
+        if (s.side === 'BUY') result.bearishVolume += s.amountUSD;
+        else result.bullishVolume += s.amountUSD;
+      } else {
+        // UNK / Pending -> Neutral
+        result.neutralVolume += s.amountUSD;
+      }
+
+      whalesSet.add(s.whaleAddress);
+    }
+    result.whaleCount = whalesSet.size;
 
     // Get Latest Signal for AI Context
     const latestSignal = await prisma.signal.findFirst({
@@ -162,18 +173,25 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
       };
     }));
 
+    result.latestAiScore = (latestSignal as any)?.aiScore || 0;
+    result.latestPattern = (latestSignal as any)?.tags || '';
+    result.latestSide = latestSignal?.side || "N/A";
+    result.latestOutcome = latestSignal?.outcome || "N/A";
+    result.lastTradeTime = latestSignal?.timestamp ? latestSignal.timestamp.toISOString() : null;
+
     return c.json({
-      market: slug,
-      bullishVolume: bullish._sum.amountUSD || 0,
-      bearishVolume: bearish._sum.amountUSD || 0,
-      whaleCount: whales.length,
-      latestAiScore: (latestSignal as any)?.aiScore || 0,
-      latestPattern: (latestSignal as any)?.tags || '',  // tags used as pattern
-      latestSide: latestSignal?.side || null,
-      latestOutcome: latestSignal?.outcome || null,
-      lastTradeTime: latestSignal?.timestamp || null,
-      history: history,
-      activeWhales: activeWhales // [NEW]
+      market: result.market,
+      bullishVolume: result.bullishVolume,
+      bearishVolume: result.bearishVolume,
+      neutralVolume: result.neutralVolume,
+      whaleCount: result.whaleCount,
+      latestAiScore: result.latestAiScore,
+      latestPattern: result.latestPattern,
+      latestSide: result.latestSide,
+      latestOutcome: result.latestOutcome,
+      lastTradeTime: result.lastTradeTime,
+      history: result.history,
+      activeWhales: result.activeWhales
     });
   } catch (e: any) {
     console.error("API Error detailed:", e);
