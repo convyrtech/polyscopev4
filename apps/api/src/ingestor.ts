@@ -244,10 +244,12 @@ export class PolymarketIngestor {
 
         // FIX 3: Lazy Load if missing
         if (!metadata) {
-            // console.log(`🔍 [Stream B] Unknown Asset ${assetId}, attempting lazy load...`);
+            console.log(`🔍 [Stream B] Unknown Asset ${assetId}, attempting lazy load...`);
             try {
                 metadata = await this.fetchMarketDetails(assetId);
-            } catch (e) { }
+            } catch (e: any) {
+                console.error(`Failed to resolve market ${assetId}:`, e.message);
+            }
         }
 
         // [DATA INTEGRITY FIX] Use PENDING state instead of Drop
@@ -360,8 +362,21 @@ export class PolymarketIngestor {
             };
             // Note: passing dummy whale stats for now as AnalysisService handles trade-specific scoring? 
             // Or should we pass real whale stats? Existing code passed {pnl:0...}
-            const aiScore = this.analysisService.calculateScore({ pnl: 0, winrate: 0, totalTrades: 0 }, tradeData);
+            const aiScore = this.analysisService.calculateScore({ pnl: whaleObj.pnl, winrate: whaleObj.winrate, totalTrades: 0 }, tradeData);
             const classification = this.analysisService.classifyTrade(tradeData);
+
+            // [FIX] Persist whale score to database
+            try {
+                await prisma.whale.update({
+                    where: { address: makerAddr },
+                    data: {
+                        score: aiScore,
+                        lastAnalyzed: new Date()
+                    }
+                });
+            } catch (scoreErr: any) {
+                console.warn(`⚠️ Failed to update whale score for ${makerAddr}:`, scoreErr.message);
+            }
 
             const strategyResult = this.strategyService.evaluate(signalCandidate, whaleObj);
             let betName = null;
@@ -440,7 +455,7 @@ export class PolymarketIngestor {
                 this.subscribeToTopMarkets();
             }
 
-        } catch (e) {
+        } catch (e: any) {
             console.error('❌ [Ingestor] Cache Refresh Error:', e.message);
         }
     }
@@ -682,55 +697,81 @@ export class PolymarketIngestor {
                 // Or we can assume they are now in "marketCache" so the Detective *will* process them if they appear in trade streams.
             }
 
-        } catch (e) {
+        } catch (e: any) {
             console.error(`❌ [Ingestor] Track New Market Error:`, e.message);
         }
     }
 
-    private async fetchMarketDetails(assetId: string): Promise<MarketCache | undefined> {
+    private async fetchMarketDetails(assetId: string, retryCount = 0): Promise<MarketCache | undefined> {
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 1000;
+
         try {
-            // We can query Gamma by market ID? Or just list and filter?
-            // Gamma doesn't have a direct "get market by asset ID" endpoint easily documented here?
-            // Usually we search by slug or ID. 
-            // Workaround: We query the specific market endpoint if we knew the market ID.
-            // But we only have assetId. 
-            // Let's try to query /markets with nested params if possible, or search?
-            // Actually, the user asked to "Fetch the single market".
-            // We can assume we might need to search or just GET /markets/{id} if we can derive it.
-            // Since we don't have the market ID, we might have to skip or do a broader search?
+            // The Gamma API doesn't support direct clob_token_id lookup.
+            // Strategy: Fetch active markets (cached batch) and search for matching assetId
+            // in their clobTokenIds array.
 
-            // Wait, for Poly, we can look up by token_id?
-            // Let's try querying `clobTokenIds`?
-            // The Gamma API supports `id` (marketID).
+            console.log(`🔍 [Ingestor] Fetching market details for asset: ${assetId}`);
 
-            // Let's try a direct look up if possible. If not, maybe just `markets?clob_token_id=${assetId}`?
-            // Let's assume there is a query param for that. 
-            // If not, we fall back to a wide search.
-
-            // A better approach for now: Query "markets" with no limit effectively? No that's too heavy.
-            // Let's try the `id` param if we can't find it.
-
-            // Actually, let's use the provided endpoint and hope for a filter.
-            // `https://gamma-api.polymarket.com/markets?clob_token_id=...`
-
+            // Fetch a batch of active markets sorted by volume (most likely to contain active trades)
             const response = await axios.get(GAMMA_URL, {
-                params: { clob_token_id: assetId }
+                params: {
+                    active: true,
+                    closed: false,
+                    limit: 100,
+                    sort: 'volume',
+                    ascending: false
+                },
+                timeout: 10000
             });
 
-            const data = response.data;
-            // Response might be a list or single object
-            const markets = Array.isArray(data) ? data : [data];
-
-            if (markets.length > 0) {
-                const m = markets[0];
-                this.processMarketData(m); // Cache it!
-                return this.marketCache.get(assetId);
+            const markets = response.data;
+            if (!Array.isArray(markets) || markets.length === 0) {
+                console.warn(`⚠️ [Ingestor] No markets returned from Gamma API`);
+                return undefined;
             }
 
+            // Search through markets to find one containing this assetId
+            for (const m of markets) {
+                let clobIds: string[] = [];
+
+                // Parse clobTokenIds (can be string or array)
+                if (m.clobTokenIds) {
+                    try {
+                        clobIds = typeof m.clobTokenIds === 'string'
+                            ? JSON.parse(m.clobTokenIds)
+                            : m.clobTokenIds;
+                    } catch { }
+                }
+
+                // Also check tokens array
+                if (m.tokens && Array.isArray(m.tokens)) {
+                    for (const t of m.tokens) {
+                        if (t.token_id) clobIds.push(t.token_id);
+                    }
+                }
+
+                // Check if our assetId is in this market
+                if (clobIds.includes(assetId)) {
+                    console.log(`✅ [Ingestor] Found market for ${assetId}: ${m.slug}`);
+                    this.processMarketData(m); // Cache it!
+                    return this.marketCache.get(assetId);
+                }
+            }
+
+            console.warn(`⚠️ [Ingestor] Asset ${assetId} not found in top 100 markets`);
             return undefined;
 
-        } catch (e) {
-            console.warn(`⚠️ [Ingestor] Lazy Load Failed for ${assetId}: ${e.message}`);
+        } catch (e: any) {
+            // Handle rate limiting with exponential backoff
+            if (e.response?.status === 429 && retryCount < MAX_RETRIES) {
+                const delay = RETRY_DELAY_MS * Math.pow(2, retryCount);
+                console.warn(`⚠️ [Ingestor] Rate limited, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return this.fetchMarketDetails(assetId, retryCount + 1);
+            }
+
+            console.error(`❌ [Ingestor] Lazy Load Failed for ${assetId}:`, e.message);
             return undefined;
         }
     }
