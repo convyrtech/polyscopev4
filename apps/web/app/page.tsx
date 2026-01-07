@@ -11,6 +11,7 @@ interface Signal {
     amountUSD: number;
     aiScore: number;
     tags: string;
+    whaleAddress: string; // Added from API
     whale: {
         alias: string | null;
     };
@@ -36,6 +37,12 @@ export default function Home() {
                 setLoading(false);
             });
     }, []);
+
+    // Helper: Truncate Address (0x1234...abcd)
+    const truncateAddress = (addr: string) => {
+        if (!addr) return 'Anonymous';
+        return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+    };
 
     // Helper for Tier Colors
     const getTierColor = (alias: string | null) => {
@@ -100,7 +107,7 @@ export default function Home() {
                         {/* Table Header */}
                         <div className="grid grid-cols-12 gap-4 border-b border-zinc-800 pb-4 text-zinc-500 text-xs uppercase tracking-[0.15em] font-semibold mb-2">
                             <div className="col-span-2">Time</div>
-                            <div className="col-span-2">Whale Tier</div>
+                            <div className="col-span-2">Whale / Actor</div>
                             <div className="col-span-3">Market</div>
                             <div className="col-span-1">Side</div>
                             <div className="col-span-2 text-right">Size (USD)</div>
@@ -128,9 +135,9 @@ export default function Home() {
                                             {new Date(signal.timestamp).toLocaleTimeString()}
                                         </div>
 
-                                        {/* Tier */}
+                                        {/* Tier / Actor */}
                                         <div className={`col-span-2 font-mono text-xs uppercase tracking-wider ${getTierColor(signal.whale.alias)}`}>
-                                            {signal.whale.alias || 'UNKNOWN'}
+                                            {signal.whale.alias || truncateAddress(signal.whaleAddress)}
                                         </div>
 
                                         {/* Market */}
