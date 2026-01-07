@@ -242,32 +242,38 @@ export class PolymarketIngestor {
         const assetId = trade.asset_id || trade.asset; // Handle both
         let metadata = this.marketCache.get(assetId);
 
-        // FIX 3: Lazy Load if missing
-        if (!metadata) {
+        // [FIX] Trade API already returns slug, outcome, title, conditionId!
+        // Use trade data directly as primary source
+        let marketSlug = trade.slug || trade.eventSlug || 'pending_resolution';
+        let conditionId = trade.conditionId || assetId;
+        let outcome = trade.outcome || 'UNK';
+        let title = trade.title || 'Unknown Market';
+
+        // If we got data from trade, cache it for future use
+        if (trade.slug && !metadata) {
+            this.marketCache.set(assetId, {
+                slug: trade.slug,
+                question: trade.title || '',
+                conditionId: trade.conditionId || assetId,
+                outcome: trade.outcome || 'UNK'
+            });
+            metadata = this.marketCache.get(assetId);
+        }
+
+        // Fallback: Lazy load only if trade didn't have slug
+        if (marketSlug === 'pending_resolution' && !metadata) {
             console.log(`🔍 [Stream B] Unknown Asset ${assetId}, attempting lazy load...`);
             try {
                 metadata = await this.fetchMarketDetails(assetId);
+                if (metadata?.slug) {
+                    marketSlug = metadata.slug;
+                    conditionId = metadata.conditionId || assetId;
+                    outcome = metadata.outcome || 'UNK';
+                    title = metadata.question || title;
+                }
             } catch (e: any) {
                 console.error(`Failed to resolve market ${assetId}:`, e.message);
             }
-        }
-
-        // [DATA INTEGRITY FIX] Use PENDING state instead of Drop
-        let marketSlug = 'pending_resolution';
-        let conditionId = 'pending';
-        let outcome = 'UNK';
-        let title = 'Pending Metadata...';
-
-        if (!metadata || !metadata.slug) {
-            // Triger Force Track for this unknown asset to heal self eventually
-            // We can't query trackNewMarket with assetId easily but we can try reverse lookup next time
-            // For now, save as pending so we don't lose the volume.
-            // console.warn(`⚠️ Keeping trade for ${assetId} as PENDING`);
-        } else {
-            marketSlug = metadata.slug;
-            conditionId = metadata.conditionId || assetId;
-            outcome = metadata.outcome || 'UNK';
-            title = metadata.question;
         }
 
         // Mark as seen (We process EVERYTHING now)
@@ -713,16 +719,15 @@ export class PolymarketIngestor {
 
             console.log(`🔍 [Ingestor] Fetching market details for asset: ${assetId}`);
 
-            // Fetch a batch of active markets sorted by volume (most likely to contain active trades)
+            // Fetch a batch of markets sorted by volume (most likely to contain active trades)
+            // Use higher limit and include all markets (not just active) for better coverage
             const response = await axios.get(GAMMA_URL, {
                 params: {
-                    active: true,
-                    closed: false,
-                    limit: 100,
+                    limit: 500,
                     sort: 'volume',
                     ascending: false
                 },
-                timeout: 10000
+                timeout: 15000
             });
 
             const markets = response.data;
