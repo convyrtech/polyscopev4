@@ -23,6 +23,7 @@
         "autoprefixer": "^10.4.17",
         "postcss": "^8.4.35",
         "tailwindcss": "^3.4.1",
-        "@whalescope/tsconfig": "workspace:*"
+        "@whalescope/tsconfig": "workspace:*",
+        "@playwright/test": "^1.41.0"
     }
 }
