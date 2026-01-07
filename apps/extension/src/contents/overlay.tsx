@@ -64,7 +64,7 @@ const WhaleOverlay = () => {
 
         try {
             // [VPS CONFIGURATION]
-            const res = await fetch(`http://87.120.186.161:3001/api/markets/${marketSlug}/sentiment`);
+            const res = await fetch(`https://whalescope.87.120.186.161.sslip.io/api/markets/${marketSlug}/sentiment`);
             if (res.ok) {
                 const json = await res.json();
 
@@ -105,75 +105,101 @@ const WhaleOverlay = () => {
 
     const isContrarian = whaleBullishPct < 0.4;
 
-    // ...
-
-    {/* 3. Sentiment Bars (with Neutral) */ }
-    <div className="space-y-4">
-        <div className="flex justify-between text-[10px] uppercase tracking-widest mb-1 text-emerald-500 font-bold">
-            <span>Smart Money</span>
-            <span>
-                {neutralPct > 0.5 ? 'MIXED/PENDING' : (bullishPct > 0.5 ? 'BULLISH' : 'BEARISH')}
-            </span>
-        </div>
-        <div className="h-2 w-full bg-zinc-900 flex overflow-hidden">
-            {/* Bullish */}
-            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${Math.round(bullishPct * 100)}%` }}></div>
-            {/* Neutral/Pending (Gray) */}
-            <div className="h-full bg-zinc-600 transition-all" style={{ width: `${Math.round(neutralPct * 100)}%` }}></div>
-            {/* Bearish */}
-            <div className="h-full bg-rose-500 transition-all" style={{ width: `${Math.round(bearishPct * 100)}%` }}></div>
-        </div>
-    </div>
-
-    {/* [NEW] WHALE ROSTER (Active Players) */ }
-    {
-        data.activeWhales && data.activeWhales.length > 0 && (
-            <div className="pt-4 border-t border-zinc-900">
-                <div className="text-[9px] uppercase tracking-widest text-zinc-500 mb-2">
-                    Active Whales (Top 5)
-                </div>
-                <div className="space-y-2">
-                    {data.activeWhales.map((w, i) => (
-                        <div key={i} className="flex justify-between items-center text-[10px] bg-zinc-900/10 p-1 border border-zinc-800/50">
-                            <div className="flex items-center space-x-2">
-                                <span className="text-zinc-600 font-mono">#{i + 1}</span>
-                                <span className={`font-bold ${w.winrate > 60 ? 'text-purple-400' : 'text-zinc-300'}`}>
-                                    {w.alias || w.address.slice(0, 6)}
-                                </span>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <span className="text-zinc-500">{w.winrate.toFixed(0)}% WR</span>
-                                <span className="text-emerald-500 font-mono">${(w.volume / 1000).toFixed(1)}k</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
+    return (
+        <div className="fixed top-4 right-4 w-80 bg-black/95 backdrop-blur-lg border border-zinc-800 shadow-2xl p-4 z-[9999] font-sans text-white rounded-lg">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-4">
+                <div className="text-xs uppercase tracking-widest text-zinc-500">🐋 WhaleScope</div>
+                <button
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="text-zinc-500 hover:text-white transition"
+                >
+                    {isExpanded ? '−' : '+'}
+                </button>
             </div>
-        )
-    }
 
-    {/* 4. HISTORY CHART (Sparkline) */ }
-    {
-        data.history && data.history.length > 2 && (
-            <div className="h-16 w-full border-t border-zinc-900 pt-2 mt-2 opacity-80">
-                <LineChart width={270} height={60} data={data.history}>
-                    <XAxis dataKey="time" hide />
-                    <YAxis domain={[0, 100]} hide />
-                    <Line
-                        type="monotone"
-                        dataKey="score"
-                        stroke={data.latestAiScore && data.latestAiScore > 50 ? "#34d399" : "#f43f5e"}
-                        strokeWidth={2}
-                        dot={false}
-                        isAnimationActive={false}
-                    />
-                </LineChart>
-            </div>
-        )
+            {isExpanded && (
+                <>
+                    {loading && <div className="text-zinc-500 text-xs">Loading...</div>}
 
-            </div >
-        </div >
-    )
+                    {!loading && !data && (
+                        <div className="text-zinc-500 text-xs">No whale activity detected</div>
+                    )}
+
+                    {!loading && data && (
+                        <>
+                            {/* Whale Count */}
+                            <div className="mb-4">
+                                <div className="text-2xl font-bold text-emerald-400">{data.whaleCount}</div>
+                                <div className="text-[10px] uppercase tracking-widest text-zinc-500">Active Whales</div>
+                            </div>
+
+                            {/* 3. Sentiment Bars (with Neutral) */}
+                            <div className="space-y-4">
+                                <div className="flex justify-between text-[10px] uppercase tracking-widest mb-1 text-emerald-500 font-bold">
+                                    <span>Smart Money</span>
+                                    <span>
+                                        {neutralPct > 0.5 ? 'MIXED/PENDING' : (bullishPct > 0.5 ? 'BULLISH' : 'BEARISH')}
+                                    </span>
+                                </div>
+                                <div className="h-2 w-full bg-zinc-900 flex overflow-hidden">
+                                    {/* Bullish */}
+                                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${Math.round(bullishPct * 100)}%` }}></div>
+                                    {/* Neutral/Pending (Gray) */}
+                                    <div className="h-full bg-zinc-600 transition-all" style={{ width: `${Math.round(neutralPct * 100)}%` }}></div>
+                                    {/* Bearish */}
+                                    <div className="h-full bg-rose-500 transition-all" style={{ width: `${Math.round(bearishPct * 100)}%` }}></div>
+                                </div>
+                            </div>
+
+                            {/* WHALE ROSTER (Active Players) */}
+                            {data.activeWhales && data.activeWhales.length > 0 && (
+                                <div className="pt-4 border-t border-zinc-900 mt-4">
+                                    <div className="text-[9px] uppercase tracking-widest text-zinc-500 mb-2">
+                                        Active Whales (Top 5)
+                                    </div>
+                                    <div className="space-y-2">
+                                        {data.activeWhales.map((w, i) => (
+                                            <div key={i} className="flex justify-between items-center text-[10px] bg-zinc-900/10 p-1 border border-zinc-800/50">
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-zinc-600 font-mono">#{i + 1}</span>
+                                                    <span className={`font-bold ${w.winrate > 60 ? 'text-purple-400' : 'text-zinc-300'}`}>
+                                                        {w.alias || w.address.slice(0, 6)}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-zinc-500">{w.winrate.toFixed(0)}% WR</span>
+                                                    <span className="text-emerald-500 font-mono">${(w.volume / 1000).toFixed(1)}k</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 4. HISTORY CHART (Sparkline) */}
+                            {data.history && data.history.length > 2 && (
+                                <div className="h-16 w-full border-t border-zinc-900 pt-2 mt-2 opacity-80">
+                                    <LineChart width={270} height={60} data={data.history}>
+                                        <XAxis dataKey="time" hide />
+                                        <YAxis domain={[0, 100]} hide />
+                                        <Line
+                                            type="monotone"
+                                            dataKey="score"
+                                            stroke={data.latestAiScore && data.latestAiScore > 50 ? "#34d399" : "#f43f5e"}
+                                            strokeWidth={2}
+                                            dot={false}
+                                            isAnimationActive={false}
+                                        />
+                                    </LineChart>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </>
+            )}
+        </div>
+    );
 }
 
 export default WhaleOverlay

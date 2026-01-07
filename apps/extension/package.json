@@ -32,7 +32,7 @@
         ],
         "host_permissions": [
             "https://polymarket.com/*",
-            "http://87.120.186.161:3001/*"
+            "https://whalescope.87.120.186.161.sslip.io/*"
         ]
     }
 }

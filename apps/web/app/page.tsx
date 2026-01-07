@@ -25,7 +25,7 @@ export default function Home() {
         setTimestamp(new Date().toLocaleTimeString());
 
         // Fetch Data from NEW Endpoint
-        fetch('http://localhost:3001/api/signals/feed')
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/signals/feed`)
             .then((res) => res.json())
             .then((data) => {
                 setSignals(data);
