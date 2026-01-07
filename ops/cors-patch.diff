@@ -1,0 +1,19 @@
+--- a/apps/api/src/index.ts
++++ b/apps/api/src/index.ts
+@@ -14,9 +14,15 @@ const prisma = new PrismaClient()
+ 
+ app.use('/*', cors({
+   origin: (origin) => {
+-    return origin || '*'; // Reflect origin to support credentials
++    // Allow Polymarket and our HTTPS API domain
++    const allowedOrigins = [
++      'https://polymarket.com',
++      'https://www.polymarket.com',
++      'https://whalescope.87.120.186.161.sslip.io'
++    ];
++    if (!origin || allowedOrigins.includes(origin)) return origin || '*';
++    return origin; // Reflect for Chrome extension localhost
+   },
+   allowMethods: ['GET', 'POST', 'OPTIONS'],
+   allowHeaders: ['Content-Type', 'Authorization', 'Access-Control-Allow-Private-Network'],
+   exposeHeaders: ['Content-Length'],

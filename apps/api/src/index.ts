@@ -13,7 +13,15 @@ const prisma = new PrismaClient()
 
 app.use('/*', cors({
   origin: (origin) => {
-    return origin || '*'; // Reflect origin to support credentials
+    // Allow Polymarket and our HTTPS API domain
+    const allowedOrigins = [
+      'https://polymarket.com',
+      'https://www.polymarket.com',
+      'https://whalescope.87.120.186.161.sslip.io'
+    ];
+    // Allow if origin is in allowedOrigins, or reflect for extensions
+    if (!origin || allowedOrigins.includes(origin)) return origin || '*';
+    return origin; // Reflect for Chrome extension localhost
   },
   allowMethods: ['GET', 'POST', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Access-Control-Allow-Private-Network'],
@@ -49,6 +57,11 @@ resolver.resolveSignals().catch(err => console.error("Initial Resolution Error:"
 // --- 2. API Routes ---
 app.get('/', (c) => {
   return c.text('WhaleScope API & Streamer is Active 🐳')
+})
+
+// Health check endpoint for load balancers
+app.get('/health', (c) => {
+  return c.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
 app.get('/api/markets/:slug/sentiment', async (c) => {

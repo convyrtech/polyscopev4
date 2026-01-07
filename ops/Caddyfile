@@ -1,0 +1,29 @@
+# Caddyfile for WhaleScope API
+# Uses sslip.io for automatic SSL without buying a domain
+
+whalescope.87.120.186.161.sslip.io {
+    # Reverse proxy to the Node.js API
+    reverse_proxy localhost:3001
+
+    # Enable compression
+    encode gzip zstd
+
+    # Logging
+    log {
+        output file /var/log/caddy/whalescope.log
+        format json
+    }
+
+    # Headers for security
+    header {
+        # CORS is handled by the API itself
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}
+
+# Health check endpoint (optional, direct IP access)
+:80 {
+    respond /health "OK" 200
+}
