@@ -54,9 +54,29 @@ export class PaperTradingService {
                     if (!config.whales.includes(signal.whaleAddress)) continue;
                 }
 
-                // Filter: Min Score (Default to 0 if not set, but usually set)
-                // Use slightly loose check to allow 0
-                if (config.minScore !== undefined && signal.aiScore < config.minScore) continue;
+                // Filter: Min Score
+                const minScore = config.minScore !== undefined ? Number(config.minScore) : 0;
+                if (signal.aiScore < minScore) {
+                    // console.log(`Skipping ${strategy.name}: Score ${signal.aiScore} < ${minScore}`);
+                    continue;
+                }
+
+                // Filter: Max Price (e.g., for Contrarian/Longshot)
+                if (config.maxPrice !== undefined) {
+                    const maxPrice = Number(config.maxPrice);
+                    if (signal.price > maxPrice) {
+                        // console.log(`Skipping ${strategy.name}: Price ${signal.price} > ${maxPrice}`);
+                        continue;
+                    }
+                }
+
+                // Filter: Min Volume
+                if (config.minVol !== undefined) {
+                    const minVol = Number(config.minVol);
+                    if (signal.amountUSD < minVol) {
+                        continue;
+                    }
+                }
 
                 // Pessimistic Slippage (+1%)
                 // If we BUY, we pay more. 
