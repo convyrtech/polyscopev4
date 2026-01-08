@@ -17,7 +17,10 @@ interface Signal {
     };
 }
 
+import { Header } from '../components/ui/header';
+
 export default function Home() {
+    // ... (state logic remains)
     const [signals, setSignals] = useState<Signal[]>([]);
     const [loading, setLoading] = useState(true);
     const [timestamp, setTimestamp] = useState<string>("");
@@ -38,6 +41,8 @@ export default function Home() {
             });
     }, []);
 
+    // ... (helpers remain)
+
     // Helper: Truncate Address (0x1234...abcd)
     const truncateAddress = (addr: string) => {
         if (!addr) return 'Anonymous';
@@ -56,18 +61,8 @@ export default function Home() {
     return (
         <main className="min-h-screen bg-black text-white p-6 md:p-12 lg:p-24 max-w-[1600px] mx-auto selection:bg-emerald-900 selection:text-white">
 
-            {/* --- HEADER SECTION --- */}
-            <header className="mb-24">
-                <h1 className="text-6xl md:text-9xl font-light tracking-tighter mb-6 uppercase text-white">
-                    Whale<span className="text-zinc-600">Scope</span>
-                </h1>
-                <div className="flex items-center gap-4">
-                    <div className="h-[2px] w-12 bg-zinc-800"></div>
-                    <p className="text-zinc-500 text-lg md:text-xl tracking-widest uppercase">
-                        Polymarket Shadow Feed (Anonymous)
-                    </p>
-                </div>
-            </header>
+            <Header />
+
 
             {/* --- BENTO GRID STATS --- */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-16 mb-32">
@@ -141,7 +136,7 @@ export default function Home() {
                                         </div>
 
                                         {/* Market */}
-                                        <div className="col-span-3 text-zinc-300 font-sans text-sm truncate pr-4" title={signal.marketSlug}>
+                                        <div className="col-span-3 text-zinc-300 font-sans text-sm max-w-[200px] truncate pr-4" title={signal.marketSlug}>
                                             {signal.marketSlug.replace(/-/g, ' ')}
                                         </div>
 

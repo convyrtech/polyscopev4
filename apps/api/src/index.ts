@@ -41,6 +41,10 @@ import { ResolutionService } from './services/resolution.service';
 const ingestor = new PolymarketIngestor();
 const resolver = new ResolutionService();
 
+import { strategies } from './routes/strategies';
+app.route('/api/strategies', strategies);
+
+
 // Start Ingestion Service (Non-blocking)
 ingestor.start().catch(err => {
   console.error("Failed to start ingestor:", err);
