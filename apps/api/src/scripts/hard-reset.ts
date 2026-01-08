@@ -76,17 +76,34 @@ async function main() {
 
     console.log('🌱 Re-seeding Strategies...');
     for (const s of productionStrategies) {
+        // Construct stable ID from name (e.g. "Insider Follower" -> "insider-follower")
+        const stableId = s.name.toLowerCase().replace(/\s+/g, '-');
+
         await prisma.strategy.upsert({
-            where: { name: s.name },
+            where: { id: stableId },
             update: {
                 status: 'ACTIVE',
                 config: s.config as any
             },
             create: {
+                id: stableId, // Explicit ID
                 name: s.name,
-                description: s.description,
+                // description: s.description, // Schema might not have description? Let's check schema.
+                // Schema Line 91: config Json. Line 89: name String. 
+                // Wait, schema DOES NOT HAVE DESCRIPTION field on line 87+.
+                // My hard-reset script has 'description' property in create, but reset-and-seed puts it in config?
+                // reset-and-seed: config: { description: "..." }
+                // My hard-reset: create: { name, description, ... } -> This would FAIL if description col doesn't exist.
+                // Schema check: 
+                // model Strategy { id, name, status, config, createdAt, positions }
+                // NO description column.
+
+                // So I must put description inside config or remove it.
                 status: 'ACTIVE',
-                config: s.config as any
+                config: {
+                    ...s.config,
+                    description: s.description
+                } as any
             }
         });
         console.log(`   ✅ Seeded: ${s.name}`);
