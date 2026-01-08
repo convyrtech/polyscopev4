@@ -10,8 +10,8 @@ git pull origin main || echo "⚠️ Git pull failed or not a git repo, continui
 # 2. Rebuild API
 echo "🛠️ Rebuilding API..."
 cd apps/api
-npm install
-npm run build
+pnpm install
+pnpm run build
 cd ../..
 
 # 3. Restart Process
