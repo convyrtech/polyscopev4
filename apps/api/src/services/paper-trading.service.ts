@@ -54,14 +54,15 @@ export class PaperTradingService {
                     if (!config.whales.includes(signal.whaleAddress)) continue;
                 }
 
-                // Filter: Min Score
+                // [FORCE UPDATE] Strict Filtering Logic
+                // 1. Min Score Filter
                 const minScore = config.minScore !== undefined ? Number(config.minScore) : 0;
                 if (signal.aiScore < minScore) {
                     // console.log(`Skipping ${strategy.name}: Score ${signal.aiScore} < ${minScore}`);
                     continue;
                 }
 
-                // Filter: Max Price (e.g., for Contrarian/Longshot)
+                // 2. Max Price Filter (Critical for Contrarian)
                 if (config.maxPrice !== undefined) {
                     const maxPrice = Number(config.maxPrice);
                     if (signal.price > maxPrice) {
@@ -70,7 +71,7 @@ export class PaperTradingService {
                     }
                 }
 
-                // Filter: Min Volume
+                // 3. Min Volume Filter
                 if (config.minVol !== undefined) {
                     const minVol = Number(config.minVol);
                     if (signal.amountUSD < minVol) {
