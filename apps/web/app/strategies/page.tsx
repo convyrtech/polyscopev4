@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { Header } from '../../components/ui/header';
+import { StrategyCard } from '../../components/strategies/strategy-card';
 
+// ... interfaces ...
 interface Stats {
     activePositions: number;
     netPnL: number;
@@ -27,7 +29,8 @@ interface Position {
     pnl: number | null;
     status: string;
     openedAt: string;
-    strategy: { name: string };
+    strategy: { name: string; id?: string }; // ensure ID is here? Prisma includes full object.
+    strategyId: string; // Foreign key is usually available
     exitReason?: string;
 }
 
@@ -37,7 +40,23 @@ export default function StrategyPage() {
     const [positions, setPositions] = useState<Position[]>([]);
     const [loading, setLoading] = useState(true);
 
+    // [NEW] Filter State
+    const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
+
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+    const toggleStrategy = (id: string) => {
+        if (selectedStrategyId === id) {
+            setSelectedStrategyId(null);
+        } else {
+            setSelectedStrategyId(id);
+        }
+    };
+
+    // Filter Logic
+    const filteredPositions = selectedStrategyId
+        ? positions.filter(p => p.strategyId === selectedStrategyId)
+        : positions;
 
     useEffect(() => {
         const fetchData = async () => {
@@ -78,7 +97,7 @@ export default function StrategyPage() {
             <Header />
 
             {/* STATS BAR */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-8 mb-24 border-y border-zinc-900 py-12">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 mb-12 md:mb-24 border-y border-zinc-900 py-6 md:py-12">
                 <div>
                     <h3 className="text-zinc-600 text-xs uppercase tracking-[0.2em] mb-2 font-bold">Net PnL</h3>
                     <p className={`text-4xl md:text-5xl font-light ${getPnLColor(stats?.netPnL || 0)}`}>
@@ -110,33 +129,37 @@ export default function StrategyPage() {
                 <h2 className="text-2xl font-light uppercase tracking-tight text-white mb-8">Active Strategies</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {strategies.map(s => (
-                        <div key={s.id} className="border border-zinc-900 bg-zinc-900/10 p-6 hover:border-zinc-700 transition-colors">
-                            <div className="flex justify-between items-start mb-4">
-                                <h3 className="text-xl text-white font-medium">{s.name}</h3>
-                                <span className={`text-xs px-2 py-1 uppercase tracking-wider ${s.status === 'ACTIVE' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-red-900/30 text-red-400'}`}>
-                                    {s.status}
-                                </span>
-                            </div>
-                            <div className="space-y-2 text-sm text-zinc-500 font-mono">
-                                <div className="flex justify-between">
-                                    <span>TP: {s.config?.takeProfit ? `+${s.config.takeProfit * 100}%` : '-'}</span>
-                                    <span>SL: {s.config?.stopLoss ? `-${s.config.stopLoss * 100}%` : '-'}</span>
-                                </div>
-                                <div className="flex justify-between border-t border-zinc-900pt-2 mt-2">
-                                    <span>Total PnL:</span>
-                                    <span className={getPnLColor(s.totalPnL)}>{formatCurrency(s.totalPnL)}</span>
-                                </div>
-                            </div>
-                        </div>
+                        <StrategyCard
+                            key={s.id}
+                            strategy={s}
+                            isSelected={selectedStrategyId === s.id}
+                            onClick={() => toggleStrategy(s.id)}
+                        />
                     ))}
                 </div>
             </section>
 
             {/* POSITIONS TABLE */}
             <section>
-                <h2 className="text-2xl font-light uppercase tracking-tight text-white mb-8">Paper Positions</h2>
+                <div className="flex justify-between items-end mb-8">
+                    <h2 className="text-2xl font-light uppercase tracking-tight text-white">
+                        Paper Positions
+                        <span className="text-zinc-500 text-sm ml-4 font-mono tracking-widest">
+                            {selectedStrategyId ? '(FILTERED)' : '(ALL)'}
+                        </span>
+                    </h2>
+                    {selectedStrategyId && (
+                        <button
+                            onClick={() => setSelectedStrategyId(null)}
+                            className="text-xs uppercase tracking-widest text-red-400 hover:text-red-300 transition-colors"
+                        >
+                            [ Clear Filter ]
+                        </button>
+                    )}
+                </div>
+
                 <div className="overflow-x-auto border border-zinc-900">
-                    <table className="w-full text-left text-sm font-mono">
+                    <table className="w-full text-left text-sm font-mono min-w-[800px]">
                         <thead className="bg-zinc-900/50 text-zinc-500 uppercase tracking-wider text-xs border-b border-zinc-900">
                             <tr>
                                 <th className="p-4 font-semibold">Time</th>
@@ -150,7 +173,7 @@ export default function StrategyPage() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-900">
-                            {positions.map(p => (
+                            {filteredPositions.map(p => (
                                 <tr key={p.id} className="hover:bg-zinc-900/20 transition-colors">
                                     <td className="p-4 text-zinc-500 whitespace-nowrap">
                                         {new Date(p.openedAt).toLocaleTimeString()}
