@@ -14,6 +14,12 @@ pnpm install
 pnpm run build
 cd ../..
 
+echo "🗄️ Generating Prisma Client..."
+cd packages/db
+npx prisma generate
+cd ../..
+
+
 # 3. Restart Process
 echo "🔄 Restarting PM2 Process (whalescope-api)..."
 # Try restart, if fail, try start (assuming dist/index.js exists after build)
