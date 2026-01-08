@@ -418,27 +418,34 @@ export class PolymarketIngestor {
                 console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (Conf: ${winProb.toFixed(2)})`);
             }
 
-            // 4. Save Signal
-            console.log(`✅ [Stream B] Signal: ${trade.side} ${outcome} ($${volumeUSD.toFixed(0)}) on ${metadata?.question || assetId} [${actorAddress?.slice(0, 6)}...]`);
-
-            const signal = await prisma.signal.create({
-                data: {
-                    txHash: uniqueId,
-                    timestamp: new Date(Number(trade.timestamp) * 1000),
-                    marketSlug: marketSlug,
-                    conditionId: conditionId,
-                    outcome: outcome,
-                    side: trade.side.toUpperCase(),
-                    price: price,
-                    amountUSD: volumeUSD,
-                    whaleAddress: actorAddress || '0x000',
-                    status: 'OPEN',
-                    aiScore: aiScore,
-                    tags: classification,
-                    strategyName: betName,
-                    betAmount: betSize
+            let signal;
+            try {
+                signal = await prisma.signal.create({
+                    data: {
+                        txHash: uniqueId,
+                        timestamp: new Date(Number(trade.timestamp) * 1000),
+                        marketSlug: marketSlug,
+                        conditionId: conditionId,
+                        outcome: outcome,
+                        side: trade.side.toUpperCase(),
+                        price: price,
+                        amountUSD: volumeUSD,
+                        whaleAddress: actorAddress || '0x000',
+                        status: 'OPEN',
+                        aiScore: aiScore,
+                        tags: classification,
+                        strategyName: betName,
+                        betAmount: betSize
+                    }
+                });
+            } catch (err: any) {
+                if (err.code === 'P2002') {
+                    // Duplicate signal (Already processed) - Ignore and Skip Paper Trading
+                    // console.log(`zzz [Stream B] Skip duplicate signal: ${uniqueId}`);
+                    return;
                 }
-            });
+                throw err; // Re-throw other errors
+            }
 
             // [NEW] Paper Trading Trigger
             console.log('📨 [Ingestor] Forwarding signal to PaperService:', signal.marketSlug);
