@@ -138,8 +138,11 @@ export class PaperTradingService {
 
             // B. Take Profit
             if (config.takeProfit) {
-                // If Entry 0.50, TP 1.5x -> 0.75
-                const target = pos.entryPrice * config.takeProfit;
+                // Treat as % Gain if < 2 (e.g. 0.50 = +50%)
+                // If the user meant 2x multiplier, they should set 1.0 (100% gain)
+                const multiplier = 1 + config.takeProfit;
+                const target = pos.entryPrice * multiplier;
+
                 if (currentPrice >= target) {
                     await this.closePosition(pos, currentPrice, 'TP');
                     continue;
@@ -148,8 +151,10 @@ export class PaperTradingService {
 
             // C. Stop Loss
             if (config.stopLoss) {
-                // If Entry 0.50, SL 0.8x -> 0.40
-                const target = pos.entryPrice * config.stopLoss;
+                // Treat as % Drawdown (e.g. 0.10 = -10%)
+                const multiplier = 1 - config.stopLoss;
+                const target = pos.entryPrice * multiplier;
+
                 if (currentPrice <= target) {
                     await this.closePosition(pos, currentPrice, 'SL');
                     continue;
