@@ -20,10 +20,19 @@ npx prisma generate
 cd ../..
 
 
-# 3. Restart Process
-echo "🔄 Restarting PM2 Process (whalescope-api)..."
+# 3. Build Web
+echo "🖥️ Building Web..."
+cd apps/web
+pnpm install
+pnpm run build
+cd ../..
+
+# 4. Restart Process
+echo "🔄 Restarting PM2 Processes..."
 # Try restart, if fail, try start (assuming dist/index.js exists after build)
 pm2 restart whalescope-api || pm2 start apps/api/dist/index.js --name whalescope-api
+pm2 restart whalescope-web || pm2 start "pnpm start" --cwd apps/web --name whalescope-web
+
 
 # 4. Verification
 echo "📋 Verifying Logs (Tail 50)..."
