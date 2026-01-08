@@ -418,6 +418,10 @@ export class PolymarketIngestor {
                 console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (Conf: ${winProb.toFixed(2)})`);
             }
 
+            // [FIX] Attach resolved metadata to trade object for PaperTradingService
+            trade.marketSlug = marketSlug;
+            trade.outcome = outcome;
+
             let signal;
             try {
                 signal = await prisma.signal.create({
@@ -440,8 +444,12 @@ export class PolymarketIngestor {
                 });
             } catch (err: any) {
                 if (err.code === 'P2002') {
-                    // Duplicate signal (Already processed) - Ignore and Skip Paper Trading
-                    // console.log(`zzz [Stream B] Skip duplicate signal: ${uniqueId}`);
+                    // Duplicate signal (Already processed) - Log and Continue
+                    // We DO NOT return here if we want to ensure onSignal is called? 
+                    // No, onSignal logic creates a NEW position. We don't want to double-create.
+                    // But we DO want onMarketTrade (Price Update) to run, which is in the caller loop.
+                    // So returning here is Safe for SIGNAL logic, but we must ensure trade object was updated above.
+                    console.warn(`⚠️ [Ingestor] Duplicate Signal ignored: ${uniqueId}`);
                     return;
                 }
                 throw err; // Re-throw other errors

@@ -116,6 +116,11 @@ export class PaperTradingService {
 
         if (positions.length === 0) return;
 
+        // Sampled Log (approx 1 in 50)
+        if (Math.random() < 0.02) {
+            console.log('📉 [Paper] Price Update:', trade.marketSlug, trade.price);
+        }
+
         for (const pos of positions) {
             // Check Outcome Match
             // Store is "Yes", Trade is "Yes". 
