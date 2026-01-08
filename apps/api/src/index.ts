@@ -157,7 +157,7 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     });
 
     // Sort ASC for Chart
-    const history = historySignals.reverse().map(h => ({
+    const history = historySignals.reverse().map((h: any) => ({
       time: h.timestamp.toISOString(),
       score: h.aiScore,
       price: h.price
@@ -173,7 +173,7 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     });
 
     // Fetch aliases for these whales
-    const activeWhales = await Promise.all(topWhalesGroup.map(async (w) => {
+    const activeWhales = await Promise.all(topWhalesGroup.map(async (w: any) => {
       const whaleInfo = await prisma.whale.findUnique({
         where: { address: w.whaleAddress },
         select: { alias: true, winrate: true }

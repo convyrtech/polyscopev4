@@ -1,4 +1,4 @@
-import { Whale } from '@whalescope/db';
+// import { Whale } from '@whalescope/db';
 
 export enum StrategyType {
     SNIPER = 'SNIPER',
@@ -28,7 +28,7 @@ export interface StrategyResult {
 
 export class StrategyService {
 
-    public evaluate(signal: SignalCandidate, whale: Whale): StrategyResult {
+    public evaluate(signal: SignalCandidate, whale: any): StrategyResult {
         // =====================================================================
         // 🛑 STEP 1: THE KILL SWITCH (Global Gatekeepers)
         // =====================================================================
@@ -129,7 +129,7 @@ export class StrategyService {
      * Calculates the "Insider Radar" score (0-100).
      * Mimics PolySights logic: Freshness + Conviction + Timing.
      */
-    private calculateRadarScore(signal: SignalCandidate, whale: Whale): number {
+    private calculateRadarScore(signal: SignalCandidate, whale: any): number {
         let score = 0;
 
         // 1. FRESHNESS (Max 40)

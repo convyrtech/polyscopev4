@@ -19,7 +19,7 @@ async function main() {
     });
 
     if (signals.length === 0) console.log("   (No signals found)");
-    signals.forEach(s => {
+    signals.forEach((s: any) => {
         console.log(`   [${s.timestamp.toISOString()}] ${s.side} $${s.amountUSD.toFixed(2)} on "${s.marketSlug.slice(0, 30)}..."`);
     });
 
@@ -31,7 +31,7 @@ async function main() {
     });
 
     if (whales.length === 0) console.log("   (No whales found)");
-    whales.forEach(w => {
+    whales.forEach((w: any) => {
         console.log(`   ${w.address}: Vol $${w.volume.toFixed(0)} | PnL $${w.pnl.toFixed(0)} | Tags: [${w.tags}]`);
     });
 }
