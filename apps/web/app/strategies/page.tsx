@@ -26,7 +26,7 @@ interface Position {
     exitPrice: number | null;
     pnl: number | null;
     status: string;
-    createdAt: string;
+    openedAt: string;
     strategy: { name: string };
     exitReason?: string;
 }
@@ -153,7 +153,7 @@ export default function StrategyPage() {
                             {positions.map(p => (
                                 <tr key={p.id} className="hover:bg-zinc-900/20 transition-colors">
                                     <td className="p-4 text-zinc-500 whitespace-nowrap">
-                                        {new Date(p.createdAt).toLocaleTimeString()}
+                                        {new Date(p.openedAt).toLocaleTimeString()}
                                     </td>
                                     <td className="p-4 text-zinc-300">{p.strategy.name}</td>
                                     <td className="p-4 text-zinc-400 max-w-[200px] truncate" title={p.marketSlug}>

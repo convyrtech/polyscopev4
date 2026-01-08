@@ -75,7 +75,7 @@ strategies.get('/positions', async (c) => {
             take: 100,
             orderBy: [
                 { status: 'desc' },      // OPEN first
-                { createdAt: 'desc' }    // Then newest
+                { openedAt: 'desc' }    // Then newest
             ],
             include: { strategy: { select: { name: true } } }
         });
