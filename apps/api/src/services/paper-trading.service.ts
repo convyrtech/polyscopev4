@@ -28,7 +28,9 @@ export class PaperTradingService {
 
         if (strategies.length === 0) return;
 
-        console.log(`📝 [PaperTrading] Evaluating Signal ${signal.id} against ${strategies.length} strategies...`);
+        if (strategies.length === 0) return;
+
+        console.log('📝 [Paper] Received:', signal.marketSlug, 'Score:', signal.aiScore);
 
         // Simulate Latency (Reaction Time)
         // Pessimistic assumption: Bot takes 5s to process and land tx
@@ -45,18 +47,21 @@ export class PaperTradingService {
             for (const strategy of strategies) {
                 const config = strategy.config as any;
 
+                console.log('🔍 [Paper] Checking Strategy:', strategy.name, 'MinScore:', config.minScore, 'ActScore:', signal.aiScore);
+
                 // Filter: Whales
-                if (config.whales && Array.isArray(config.whales)) {
+                if (config.whales && Array.isArray(config.whales) && config.whales.length > 0) {
                     if (!config.whales.includes(signal.whaleAddress)) continue;
                 }
 
-                // Filter: Min Score
-                if (config.minScore && signal.aiScore < config.minScore) continue;
+                // Filter: Min Score (Default to 0 if not set, but usually set)
+                // Use slightly loose check to allow 0
+                if (config.minScore !== undefined && signal.aiScore < config.minScore) continue;
 
                 // Pessimistic Slippage (+1%)
                 // If we BUY, we pay more. 
                 // Price = signal.price * 1.01
-                let entryPrice = signal.price * 1.01;
+                let entryPrice = signal.price * (1 + (config.slippage || 0.01));
                 if (entryPrice > 0.99) entryPrice = 0.99; // Cap at 0.99
 
                 // Position Size
@@ -75,6 +80,7 @@ export class PaperTradingService {
                     }
                 });
 
+                console.log('✅ [Paper] CREATING POSITION for:', strategy.name);
                 console.log(`📝 [PaperTrading] Opened Position for ${strategy.name}: ${normalizedOutcome} @ ${entryPrice.toFixed(2)}`);
             }
         } catch (e: any) {

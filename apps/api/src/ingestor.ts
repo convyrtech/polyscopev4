@@ -419,7 +419,7 @@ export class PolymarketIngestor {
             // 4. Save Signal
             console.log(`✅ [Stream B] Signal: ${trade.side} ${outcome} ($${volumeUSD.toFixed(0)}) on ${metadata?.question || assetId} [${actorAddress?.slice(0, 6)}...]`);
 
-            await prisma.signal.create({
+            const signal = await prisma.signal.create({
                 data: {
                     txHash: uniqueId,
                     timestamp: new Date(Number(trade.timestamp) * 1000),
@@ -439,11 +439,8 @@ export class PolymarketIngestor {
             });
 
             // [NEW] Paper Trading Trigger
-            // Note: We pass the created signal. Ideally we'd fetch the created object, 
-            // but for simulation, the candidate + DB create logic is close enough.
-            // Let's form a signal-like object.
-            // Actually, we should use the object returned by prisma.signal.create, but we didn't await the return.
-            // Let's refactor line 418 to capture return.
+            console.log('📨 [Ingestor] Forwarding signal to PaperService:', signal.marketSlug);
+            this.paperTradingService.onSignal(signal).catch(e => console.error("PaperService Error:", e));
 
             // Re-query or just construct payload:
             // We need ID for DB entry.
