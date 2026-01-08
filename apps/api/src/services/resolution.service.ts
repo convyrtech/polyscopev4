@@ -36,8 +36,24 @@ export class ResolutionService {
 
     private async checkMarket(slug: string) {
         try {
-            const res = await axios.get(`${GAMMA_URL}/${slug}`);
-            const market = res.data;
+            // Polymarket API: Lookup by Event Slug
+            const res = await axios.get(`https://gamma-api.polymarket.com/events`, {
+                params: { slug }
+            });
+
+            if (!res.data || res.data.length === 0) {
+                // console.warn(`⚖️ [Judge] Market/Event not found for slug: ${slug}`);
+                return;
+            }
+
+            // Events API returns an array. The market is inside the event.
+            // Simplified: We look for the market object within the event that matches our context,
+            // or if it's a single market event, just take the first market.
+            const event = res.data[0];
+            const market = event.markets ? event.markets[0] : null;
+
+            if (!market) return;
+
 
             if (market.resolved) {
                 const winningOutcome = this.getWinningOutcome(market);
