@@ -8,6 +8,16 @@ const prisma = new PrismaClient();
 async function main() {
     console.log('🧹 cleaning up Test Data...');
 
+    // 0. Delete Dependent Positions first (FK Constraint)
+    console.log('🧹 cleaning up Dependent Positions...');
+    await prisma.paperPosition.deleteMany({
+        where: {
+            strategy: {
+                name: { contains: 'Test' }
+            }
+        }
+    });
+
     // 1. Delete "Test" Strategies
     const deleted = await prisma.strategy.deleteMany({
         where: {
