@@ -122,15 +122,11 @@ export class PaperTradingService {
             // A. Panic Exit (Copy-Sell)
             // If the Whale who signaled this (or any whale in strategy?) sells.
             // Simplified: If "Smart Money" sells, we sell.
-            if (trade.side === 'SELL' && trade.whaleAddress && trade.whaleAddress === trade.actorAddress) {
-                // Wait, trade.actorAddress is what we track.
-                // We need to know who 'Signaled' this position?
-                // We didn't store 'whaleAddress' on PaperPosition, but we have 'signalId'.
-                // To save DB lookup, let's assume if ANY 'Smart' actor sells, it's bad?
-                // Better: Strategy config might say "Follow Whales".
-                // If the actor is in the Strategy's whale list, and they SELL, we panic.
-
+            // A. Panic Exit (Copy-Sell)
+            // If a whale monitored by this strategy sells, we exit.
+            if (trade.side === 'SELL') {
                 if (config.whales && config.whales.includes(trade.actorAddress)) {
+                    // Check if this specific whale is in our strategy's list
                     await this.closePosition(pos, currentPrice, 'PANIC_WHALE_DUMP');
                     continue;
                 }
