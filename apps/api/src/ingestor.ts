@@ -179,7 +179,9 @@ export class PolymarketIngestor {
                     await this.processDetectiveTrade(trade);
                     // [NEW] Live Monitoring for Paper Trading (SL/TP)
                     await this.paperTradingService.onMarketTrade(trade);
-                } catch (tradeError) { /* ignore */ }
+                } catch (tradeError: any) {
+                    console.error(`❌ [Stream B] Trade Processing Error (${trade.id}):`, tradeError.message);
+                }
             }
         } catch (e: any) {
             console.warn(`❌ [Stream B] Poll Fail ${assetId}: ${e.message}`);
