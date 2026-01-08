@@ -12,5 +12,11 @@
     },
     "include": [
         "src/**/*"
+    ],
+    "exclude": [
+        "src/test_*.ts",
+        "src/scripts/*.ts",
+        "src/check_markets.ts",
+        "src/debug_api.ts"
     ]
 }

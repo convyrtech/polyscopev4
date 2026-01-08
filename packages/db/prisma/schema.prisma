@@ -82,3 +82,35 @@ model Watchlist {
 
   @@id([userId, whaleAddress])
 }
+
+// 5. Strategy Lab (Paper Trading)
+model Strategy {
+  id        String   @id @default(cuid())
+  name      String
+  status    String   @default("ACTIVE") // ACTIVE, PAUSED
+  config    Json     // { "takeProfit": 1.5, "stopLoss": 0.8, "whales": ["0x..."] }
+  createdAt DateTime @default(now())
+  
+  positions PaperPosition[]
+}
+
+model PaperPosition {
+  id          String    @id @default(cuid())
+  strategyId  String
+  signalId    String?   // Link to original signal
+  marketSlug  String
+  outcome     String    // "Yes", "No", "Donald Trump"
+  
+  entryPrice  Float
+  amount      Float     // Position size in USD
+  status      String    @default("OPEN") // OPEN, CLOSED
+  
+  exitPrice   Float?
+  exitReason  String?   // "TP", "SL", "PANIC", "RESOLVED"
+  pnl         Float?
+  
+  openedAt    DateTime  @default(now())
+  closedAt    DateTime?
+
+  strategy    Strategy  @relation(fields: [strategyId], references: [id])
+}

@@ -1,10 +1,12 @@
 import { PrismaClient } from '@whalescope/db';
 import axios from 'axios';
+import { PaperTradingService } from './paper-trading.service';
 
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
 const prisma = new PrismaClient();
 
 export class ResolutionService {
+    private paperTradingService = PaperTradingService.getInstance();
 
     /**
      * Main loop to resolve Open Signals.
@@ -37,21 +39,47 @@ export class ResolutionService {
             const res = await axios.get(`${GAMMA_URL}/${slug}`);
             const market = res.data;
 
-            // Check if resolved
-            if (market.resolved) { // Gamma field (verify exact field name)
-                const winningOutcome = market.uma_resolution_result || market.resolution_price;
-                // Note: UMA result might be "Yes", "No", or specific token ID.
-                // For simplified logic, let's assume binary "Yes"/"No" or token string.
+            if (market.resolved) {
+                const winningOutcome = this.getWinningOutcome(market);
 
-                await this.settleSignals(slug, winningOutcome);
+                if (winningOutcome) {
+                    await this.settleSignals(slug, winningOutcome);
+                } else {
+                    console.warn(`⚖️ [Judge] ${slug} is resolved but winner is ambiguous. UMA: ${market.uma_resolution_result}`);
+                }
             }
         } catch (e: any) {
             console.error(`⚖️ [Judge] Error checking ${slug}:`, e.message);
         }
     }
 
+    private getWinningOutcome(market: any): string | null {
+        // 1. Binary Markets (0, 0.5, 1) or "Yes"/"No"
+        const res = market.uma_resolution_result || market.resolution_price;
+
+        // Handle explicit binary result
+        if (res === '1' || res === '1.0') return 'Yes';
+        if (res === '0' || res === '0.0') return 'No';
+
+        // 2. Multi-Outcome Markets (Token ID matching)
+        if (market.tokens && Array.isArray(market.tokens)) {
+            // A. Check if any token is explicitly marked winner (if Gamma supports this)
+            const explicitWinner = market.tokens.find((t: any) => t.winner === true);
+            if (explicitWinner) return explicitWinner.outcome;
+
+            // B. Match UMA result (Token ID) to Outcome Label
+            if (res) {
+                const tokenMatch = market.tokens.find((t: any) => t.token_id === res);
+                if (tokenMatch) return tokenMatch.outcome;
+            }
+        }
+
+        // 3. Fallback: string match (if result is "Donald Trump")
+        return typeof res === 'string' ? res : null;
+    }
+
     private async settleSignals(slug: string, winningOutcome: string) {
-        console.log(`⚖️ [Judge] Resolving ${slug}. Winner: ${winningOutcome}`);
+        console.log(`⚖️ [Judge] Resolving ${slug}. Winner: "${winningOutcome}"`);
 
         const signals = await prisma.signal.findMany({
             where: { marketSlug: slug, status: 'OPEN' }
@@ -61,29 +89,16 @@ export class ResolutionService {
             let status = 'LOST';
             let roi = -100;
 
-            // Simple Binary win check
-            // If winningOutcome matches our 'outcome'
-            // OR if winningOutcome is a number (1.0 = Yes, 0.0 = No)
+            // Case-insensitive comparison
+            const sigOutcome = (sig.outcome || '').trim().toLowerCase();
+            const winner = winningOutcome.trim().toLowerCase();
 
-            // Logic:
-            // "1" or "Yes" -> Yes wins.
-            // "0" or "No" -> No wins.
-
-            // Normalize
-            let winner = winningOutcome;
-            if (winningOutcome === '1') winner = 'Yes';
-            if (winningOutcome === '0') winner = 'No';
-
-            if (sig.outcome === winner) {
+            if (sigOutcome === winner) {
                 status = 'WON';
-                // Estimate ROI based on entry price
-                // Profit = (1 - price) / price * 100
+                // Estimate ROI based on entry price (Assumes payout is $1.00)
                 if (sig.price > 0) {
                     roi = ((1 - sig.price) / sig.price) * 100;
                 }
-            } else {
-                // LOST
-                // ROI is -100%
             }
 
             // Update Signal
@@ -98,6 +113,9 @@ export class ResolutionService {
             // Update Whale Stats
             await this.updateWhaleStats(sig.whaleAddress, status === 'WON', roi);
         }
+
+        // [NEW] Settle Paper Trading Positions
+        await this.paperTradingService.onMarketResolved(slug, winningOutcome);
     }
 
     private async updateWhaleStats(address: string, won: boolean, tradeRoi: number) {

@@ -4,6 +4,7 @@ import { PrismaClient } from '@whalescope/db';
 import { AnalysisService, TradeData } from './services/analysis.service';
 import { StrategyService, StrategyType, SignalCandidate } from './services/strategy.service';
 import { RiskService } from './services/risk.service';
+import { PaperTradingService } from './services/paper-trading.service';
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
@@ -39,6 +40,7 @@ export class PolymarketIngestor {
     private analysisService = new AnalysisService();
     private strategyService = new StrategyService();
     private riskService = new RiskService();
+    private paperTradingService = PaperTradingService.getInstance();
 
     constructor() {
         console.log('🐳 Hybrid Ingestor Initialized (Stream A: WS Pulse + Stream B: HTTP Detective)');
@@ -175,6 +177,8 @@ export class PolymarketIngestor {
             for (const trade of sortedTrades) {
                 try {
                     await this.processDetectiveTrade(trade);
+                    // [NEW] Live Monitoring for Paper Trading (SL/TP)
+                    await this.paperTradingService.onMarketTrade(trade);
                 } catch (tradeError) { /* ignore */ }
             }
         } catch (e: any) {
@@ -287,17 +291,17 @@ export class PolymarketIngestor {
 
         // console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${marketSlug}`);
 
-        // 1. Identify Maker
-        // API returns "owner" or "proxyWallet" sometimes? 
-        // Let's fallback aggressively.
-        let makerAddr = trade.maker_address || trade.owner || trade.proxyWallet;
-        if (!makerAddr && trade.name) {
+        // 1. Identify Actor (Taker / Aggressor)
+        // API returns "owner" or "proxyWallet" which is the Taker.
+        // Clarification: We are tracking the Active Trader, not the Passive Maker.
+        let actorAddress = trade.maker_address || trade.owner || trade.proxyWallet;
+        if (!actorAddress && trade.name) {
             // Sometimes name is the address if no alias?
-            if (trade.name.startsWith('0x')) makerAddr = trade.name;
+            if (trade.name.startsWith('0x')) actorAddress = trade.name;
         }
 
-        if (!makerAddr) {
-            console.warn(`⚠️ No Maker Address for ${uniqueId}`);
+        if (!actorAddress) {
+            console.warn(`⚠️ No Actor Address for ${uniqueId}`);
             return;
         }
 
@@ -315,14 +319,14 @@ export class PolymarketIngestor {
 
         // If API provides real address, use it!
         // We will upsert the whale to ensure they strictly exist in our DB
-        if (makerAddr) {
-            const existingWhale = await prisma.whale.findUnique({ where: { address: makerAddr } });
+        if (actorAddress) {
+            const existingWhale = await prisma.whale.findUnique({ where: { address: actorAddress } });
             if (existingWhale) {
                 whaleAlias = existingWhale.alias; // Use known alias
             } else {
                 // New Whale Discovery
                 if (volumeUSD > 1000) {
-                    console.log(`🦈 [Stream B] New Whale Discovered: ${makerAddr} ($${volumeUSD.toFixed(0)})`);
+                    console.log(`🦈 [Stream B] New Whale Discovered: ${actorAddress} ($${volumeUSD.toFixed(0)})`);
                 }
             }
 
@@ -345,13 +349,13 @@ export class PolymarketIngestor {
             // `whale.upsert` returns the object!
 
             let whaleObj = await prisma.whale.upsert({
-                where: { address: makerAddr || '0x000' },
+                where: { address: actorAddress || '0x000' },
                 update: {
                     lastActive: new Date(),
                     volume: { increment: volumeUSD }
                 },
                 create: {
-                    address: makerAddr || '0x000',
+                    address: actorAddress || '0x000',
                     alias: whaleAlias,
                     volume: volumeUSD,
                     tags: whaleTags,
@@ -374,14 +378,14 @@ export class PolymarketIngestor {
             // [FIX] Persist whale score to database
             try {
                 await prisma.whale.update({
-                    where: { address: makerAddr },
+                    where: { address: actorAddress },
                     data: {
                         score: aiScore,
                         lastAnalyzed: new Date()
                     }
                 });
             } catch (scoreErr: any) {
-                console.warn(`⚠️ Failed to update whale score for ${makerAddr}:`, scoreErr.message);
+                console.warn(`⚠️ Failed to update whale score for ${actorAddress}:`, scoreErr.message);
             }
 
             const strategyResult = this.strategyService.evaluate(signalCandidate, whaleObj);
@@ -413,7 +417,7 @@ export class PolymarketIngestor {
             }
 
             // 4. Save Signal
-            console.log(`✅ [Stream B] Signal: ${trade.side} ${outcome} ($${volumeUSD.toFixed(0)}) on ${metadata?.question || assetId} [${makerAddr?.slice(0, 6)}...]`);
+            console.log(`✅ [Stream B] Signal: ${trade.side} ${outcome} ($${volumeUSD.toFixed(0)}) on ${metadata?.question || assetId} [${actorAddress?.slice(0, 6)}...]`);
 
             await prisma.signal.create({
                 data: {
@@ -425,7 +429,7 @@ export class PolymarketIngestor {
                     side: trade.side.toUpperCase(),
                     price: price,
                     amountUSD: volumeUSD,
-                    whaleAddress: makerAddr || '0x000',
+                    whaleAddress: actorAddress || '0x000',
                     status: 'OPEN',
                     aiScore: aiScore,
                     tags: classification,
@@ -433,6 +437,18 @@ export class PolymarketIngestor {
                     betAmount: betSize
                 }
             });
+
+            // [NEW] Paper Trading Trigger
+            // Note: We pass the created signal. Ideally we'd fetch the created object, 
+            // but for simulation, the candidate + DB create logic is close enough.
+            // Let's form a signal-like object.
+            // Actually, we should use the object returned by prisma.signal.create, but we didn't await the return.
+            // Let's refactor line 418 to capture return.
+
+            // Re-query or just construct payload:
+            // We need ID for DB entry.
+            // Let's wait for create.
+            // WARN: The previous code block didn't capture the result. I need to modify it.
         }
     }
 

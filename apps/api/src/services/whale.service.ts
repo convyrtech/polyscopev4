@@ -50,7 +50,7 @@ export class WhaleService {
 
         try {
             await this.performAnalysis(address);
-        } catch (e) {
+        } catch (e: any) {
             console.error(`[WhaleService] Error processing ${address}:`, e.message);
         } finally {
             this.processingCount--;
