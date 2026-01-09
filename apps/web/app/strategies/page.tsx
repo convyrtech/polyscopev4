@@ -122,29 +122,29 @@ export default function StrategyPage() {
             <Header />
 
             {/* STATS BAR */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 mb-12 md:mb-24 border-y border-zinc-900 py-6 md:py-12">
-                <div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-12 mb-12 md:mb-24 border-y border-zinc-900 py-6 md:py-12">
+                <div className="min-w-0">
                     <h3 className="text-zinc-600 text-xs uppercase tracking-[0.2em] mb-2 font-bold">Net PnL</h3>
-                    <p className={`text-4xl md:text-5xl font-light ${getPnLColor(stats?.netPnL || 0)}`}>
+                    <p className={`text-3xl md:text-4xl font-light truncate ${getPnLColor(stats?.netPnL || 0)}`}>
                         {stats ? formatCurrency(stats.netPnL) : '...'}
                     </p>
                 </div>
-                <div>
+                <div className="min-w-0">
                     <h3 className="text-zinc-600 text-xs uppercase tracking-[0.2em] mb-2 font-bold">Win Rate</h3>
-                    <p className="text-4xl md:text-5xl text-white font-light">
+                    <p className="text-3xl md:text-4xl text-white font-light">
                         {stats ? `${stats.winRate}%` : '...'}
                     </p>
                 </div>
-                <div>
+                <div className="min-w-0">
                     <h3 className="text-zinc-600 text-xs uppercase tracking-[0.2em] mb-2 font-bold">Active Trades</h3>
-                    <p className="text-4xl md:text-5xl text-amber-400 font-light animate-pulse">
-                        {stats ? stats.activePositions : '...'}
+                    <p className="text-3xl md:text-4xl text-amber-400 font-light animate-pulse">
+                        {stats ? stats.activePositions.toLocaleString() : '...'}
                     </p>
                 </div>
-                <div>
+                <div className="min-w-0">
                     <h3 className="text-zinc-600 text-xs uppercase tracking-[0.2em] mb-2 font-bold">Total Closed</h3>
-                    <p className="text-4xl md:text-5xl text-zinc-500 font-light">
-                        {stats ? stats.totalTrades : '...'}
+                    <p className="text-3xl md:text-4xl text-zinc-500 font-light">
+                        {stats ? stats.totalTrades.toLocaleString() : '...'}
                     </p>
                 </div>
             </div>
