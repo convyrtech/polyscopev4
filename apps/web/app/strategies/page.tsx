@@ -38,7 +38,7 @@ interface Position {
 
 interface Analytics {
     riskProfile: { bucket: string; trades: number; wins: number; winRate: number }[];
-    speedProfile: { duration: string; avgROI: number; count: number }[];
+    speedProfile: { duration: string; avgPnL: number; count: number }[];
     pnlHistory: { date: string; dailyPnL: number; cumulativePnL: number }[];
 }
 
