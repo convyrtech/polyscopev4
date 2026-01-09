@@ -122,7 +122,7 @@ strategies.get('/analytics', async (c) => {
             };
         });
 
-        // 2. SPEED PROFILE: ROI by holding duration
+        // 2. SPEED PROFILE: Avg PnL by holding duration (not ROI %, which is crazy for probability-based pricing)
         const speedBuckets = [
             { label: '<1h', minMs: 0, maxMs: 60 * 60 * 1000 },
             { label: '1-24h', minMs: 60 * 60 * 1000, maxMs: 24 * 60 * 60 * 1000 },
@@ -131,21 +131,17 @@ strategies.get('/analytics', async (c) => {
 
         const speedProfile = speedBuckets.map(bucket => {
             const inBucket = closedPositions.filter(p => {
-                if (!p.closedAt || !p.exitPrice) return false;
+                if (!p.closedAt) return false;
                 const holdMs = new Date(p.closedAt).getTime() - new Date(p.openedAt).getTime();
                 return holdMs >= bucket.minMs && holdMs < bucket.maxMs;
             });
 
-            // Proper ROI: (exitPrice - entryPrice) / entryPrice * 100
-            const totalROI = inBucket.reduce((sum, p) => {
-                if (p.entryPrice <= 0 || !p.exitPrice) return sum;
-                const roi = ((p.exitPrice - p.entryPrice) / p.entryPrice) * 100;
-                return sum + roi;
-            }, 0);
+            // Sum of PnL for this bucket
+            const totalPnL = inBucket.reduce((sum, p) => sum + (p.pnl || 0), 0);
 
             return {
                 duration: bucket.label,
-                avgROI: inBucket.length > 0 ? Number((totalROI / inBucket.length).toFixed(1)) : 0,
+                avgPnL: inBucket.length > 0 ? Number((totalPnL / inBucket.length).toFixed(2)) : 0,
                 count: inBucket.length
             };
         });

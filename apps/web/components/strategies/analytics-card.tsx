@@ -12,7 +12,7 @@ interface RiskProfileData {
 
 interface SpeedProfileData {
     duration: string;
-    avgROI: number;
+    avgPnL: number;
     count: number;
 }
 
@@ -77,7 +77,7 @@ export function RiskProfileChart({ data }: { data: RiskProfileData[] }) {
 
 // Speed profile with vertical layout (label + bar stacked)
 export function SpeedProfileChart({ data }: { data: SpeedProfileData[] }) {
-    const maxROI = Math.max(...data.map(d => Math.abs(d.avgROI)), 50);
+    const maxPnL = Math.max(...data.map(d => Math.abs(d.avgPnL)), 10);
 
     return (
         <div className="space-y-4">
@@ -87,8 +87,8 @@ export function SpeedProfileChart({ data }: { data: SpeedProfileData[] }) {
                     <div className="flex justify-between text-xs">
                         <span className="font-mono text-zinc-400">{item.duration}</span>
                         <span className="font-mono">
-                            <span className={item.avgROI >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                                {item.avgROI >= 0 ? '+' : ''}{item.avgROI}%
+                            <span className={item.avgPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                {item.avgPnL >= 0 ? '+' : ''}${Math.abs(item.avgPnL).toFixed(2)}
                             </span>
                             <span className="text-zinc-600 ml-2">({item.count})</span>
                         </span>
@@ -96,9 +96,9 @@ export function SpeedProfileChart({ data }: { data: SpeedProfileData[] }) {
                     {/* Bar */}
                     <div className="h-2 bg-zinc-800 relative overflow-hidden">
                         <div
-                            className={`absolute h-full transition-all duration-500 ${item.avgROI >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                            className={`absolute h-full transition-all duration-500 ${item.avgPnL >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}
                             style={{
-                                width: `${Math.min((Math.abs(item.avgROI) / maxROI) * 100, 100)}%`
+                                width: `${Math.min((Math.abs(item.avgPnL) / maxPnL) * 100, 100)}%`
                             }}
                         />
                     </div>

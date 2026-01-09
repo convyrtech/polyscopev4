@@ -164,7 +164,7 @@ export default function StrategyPage() {
                         )}
                     </AnalyticsCard>
 
-                    <AnalyticsCard title="Speed Profile" subtitle="Avg ROI by holding time">
+                    <AnalyticsCard title="Speed Profile" subtitle="Avg PnL by holding time">
                         {analytics ? (
                             <SpeedProfileChart data={analytics.speedProfile} />
                         ) : (
