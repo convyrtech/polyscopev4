@@ -372,9 +372,24 @@ export class PolymarketIngestor {
                 price: price,
                 side: trade.side || 'BUY'
             };
-            // Note: passing dummy whale stats for now as AnalysisService handles trade-specific scoring? 
-            // Or should we pass real whale stats? Existing code passed {pnl:0...}
-            const aiScore = this.analysisService.calculateScore({ pnl: whaleObj.pnl, winrate: whaleObj.winrate, totalTrades: 0 }, tradeData);
+
+            // [FIX] Fetch total signal count for Freshness Check
+            const totalTrades = await prisma.signal.count({
+                where: { whaleAddress: actorAddress || '0x000' }
+            });
+
+            // Note: totalTrades is count of PREVIOUS signals + 0 (since current not created)
+            // or should we include this one? Freshness usually means history.
+
+            const aiScore = await this.analysisService.calculateScore(
+                {
+                    pnl: whaleObj.pnl,
+                    winrate: whaleObj.winrate,
+                    totalTrades: totalTrades
+                },
+                tradeData,
+                actorAddress
+            );
             const classification = this.analysisService.classifyTrade(tradeData);
 
             // [FIX] Persist whale score to database
