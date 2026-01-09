@@ -26,12 +26,14 @@ export interface TradeData {
     price: number;
     side: 'BUY' | 'SELL';
     marketSlug?: string;  // For kill switch filtering
+    outcome?: string;     // For syndicate detection
 }
 
 // ============================================================================
 // KILL SWITCH CONSTANTS
 // ============================================================================
 const SPORTS_KEYWORDS = [
+    // ... (keywords same as before)
     'nba', 'nfl', 'nhl', 'mlb', 'mls',
     'tennis', 'atp', 'wta',
     'soccer', 'football', 'premier-league', 'bundesliga', 'serie-a', 'la-liga', 'champions-league',
@@ -57,7 +59,17 @@ export class AnalysisService {
 
     async calculateScore(whale: WhaleData, trade: TradeData, whaleAddress?: string): Promise<number> {
         const marketSlug = trade.marketSlug || '';
+        const outcome = trade.outcome || '';
+
         const debugLog: any = { market: marketSlug.substring(0, 30) };
+
+        // ====================================================================
+        // PRIORITY INTERRUPT: SYNDICATE FORCE (Project 5X)
+        // ====================================================================
+        if (marketSlug && outcome && syndicateService.isSyndicateActive(marketSlug, outcome)) {
+            logger.info(`🦅 [Score] FORCE 100: Syndicate Active on ${marketSlug} (${outcome})`);
+            return 100;
+        }
 
         // ====================================================================
         // KILL SWITCH 1: LIQUIDITY GATE

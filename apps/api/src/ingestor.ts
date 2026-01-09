@@ -5,6 +5,7 @@ import { AnalysisService, TradeData } from './services/analysis.service';
 import { StrategyService, StrategyType, SignalCandidate } from './services/strategy.service';
 import { RiskService } from './services/risk.service';
 import { PaperTradingService } from './services/paper-trading.service';
+import { SyndicateService } from './services/syndicate.service';
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
@@ -41,6 +42,7 @@ export class PolymarketIngestor {
     private strategyService = new StrategyService();
     private riskService = new RiskService();
     private paperTradingService = PaperTradingService.getInstance();
+    private syndicateService = SyndicateService.getInstance();
 
     constructor() {
         console.log('🐳 Hybrid Ingestor Initialized (Stream A: WS Pulse + Stream B: HTTP Detective)');
@@ -365,13 +367,19 @@ export class PolymarketIngestor {
                 }
             });
 
+            // 3. Syndicate Tracking (Memory)
+            if (marketSlug && actorAddress && outcome) {
+                this.syndicateService.recordTrade(marketSlug, actorAddress, outcome);
+            }
+
             // 2. AI Analysis
             const tradeData: TradeData = {
                 amountUSD: volumeUSD,
                 isNewMarket: false,
                 price: price,
                 side: trade.side || 'BUY',
-                marketSlug: marketSlug  // For kill switch filtering
+                marketSlug: marketSlug,  // For kill switch filtering
+                outcome: outcome         // For syndicate detection
             };
 
             // [FIX] Fetch total signal count for Freshness Check
