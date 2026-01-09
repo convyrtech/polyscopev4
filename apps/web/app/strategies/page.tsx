@@ -36,6 +36,7 @@ interface Position {
     strategy: { name: string; id?: string };
     strategyId: string;
     exitReason?: string;
+    signal?: { aiScore: number } | null;
 }
 
 interface Analytics {
@@ -233,6 +234,7 @@ export default function StrategyPage() {
                                 <th className="p-4 font-semibold">Strategy</th>
                                 <th className="p-4 font-semibold">Market</th>
                                 <th className="p-4 font-semibold">Outcome</th>
+                                <th className="p-4 text-center font-semibold">Score</th>
                                 <th className="p-4 text-right font-semibold">Entry</th>
                                 <th className="p-4 text-right font-semibold">Current/Exit</th>
                                 <th className="p-4 text-right font-semibold">PnL</th>
@@ -253,6 +255,17 @@ export default function StrategyPage() {
                                         {p.marketSlug}
                                     </td>
                                     <td className="p-4 text-white">{p.outcome}</td>
+                                    <td className="p-4 text-center">
+                                        {p.signal?.aiScore !== undefined ? (
+                                            <span className={`font-bold ${p.signal.aiScore >= 70 ? 'text-emerald-400' :
+                                                    p.signal.aiScore >= 50 ? 'text-amber-400' : 'text-rose-400'
+                                                }`}>
+                                                {p.signal.aiScore.toFixed(0)}
+                                            </span>
+                                        ) : (
+                                            <span className="text-zinc-600">-</span>
+                                        )}
+                                    </td>
                                     <td className="p-4 text-right text-zinc-400">
                                         ${p.entryPrice.toFixed(3)}
                                     </td>

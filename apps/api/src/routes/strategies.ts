@@ -79,7 +79,10 @@ strategies.get('/positions', async (c) => {
             orderBy: [
                 { openedAt: 'desc' }    // Newest first
             ],
-            include: { strategy: { select: { name: true } } }
+            include: {
+                strategy: { select: { name: true } },
+                signal: { select: { aiScore: true } }  // Include score for transparency
+            }
         });
         return c.json(positions);
     } catch (e: any) {
