@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { Header } from '../../components/ui/header';
+import { Tabs } from '../../components/ui/tabs';
 import { StrategyCard } from '../../components/strategies/strategy-card';
+import { AnalyticsCard, RiskProfileChart, SpeedProfileChart, PnLChart } from '../../components/strategies/analytics-card';
 
 // ... interfaces ...
 interface Stats {
@@ -29,19 +31,27 @@ interface Position {
     pnl: number | null;
     status: string;
     openedAt: string;
-    strategy: { name: string; id?: string }; // ensure ID is here? Prisma includes full object.
-    strategyId: string; // Foreign key is usually available
+    strategy: { name: string; id?: string };
+    strategyId: string;
     exitReason?: string;
+}
+
+interface Analytics {
+    riskProfile: { bucket: string; trades: number; wins: number; winRate: number }[];
+    speedProfile: { duration: string; avgROI: number; count: number }[];
+    pnlHistory: { date: string; dailyPnL: number; cumulativePnL: number }[];
 }
 
 export default function StrategyPage() {
     const [stats, setStats] = useState<Stats | null>(null);
     const [strategies, setStrategies] = useState<Strategy[]>([]);
     const [positions, setPositions] = useState<Position[]>([]);
+    const [analytics, setAnalytics] = useState<Analytics | null>(null);
     const [loading, setLoading] = useState(true);
 
-    // [NEW] Filter State
+    // Filter States
     const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
 
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -53,23 +63,38 @@ export default function StrategyPage() {
         }
     };
 
-    // Filter Logic
+    // Filter Logic: First by tab (ACTIVE/HISTORY), then by strategy
+    const tabFilteredPositions = positions.filter(p =>
+        activeTab === 'ACTIVE' ? p.status === 'OPEN' : p.status === 'CLOSED'
+    );
     const filteredPositions = selectedStrategyId
-        ? positions.filter(p => p.strategyId === selectedStrategyId)
-        : positions;
+        ? tabFilteredPositions.filter(p => p.strategyId === selectedStrategyId)
+        : tabFilteredPositions;
+
+    // Helper: Calculate holding time for active positions
+    const getHoldingTime = (openedAt: string) => {
+        const ms = Date.now() - new Date(openedAt).getTime();
+        const hours = Math.floor(ms / (1000 * 60 * 60));
+        const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+        if (hours > 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+    };
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [statsRes, stratRes, posRes] = await Promise.all([
+                const [statsRes, stratRes, posRes, analyticsRes] = await Promise.all([
                     fetch(`${API_URL}/api/strategies/stats`),
                     fetch(`${API_URL}/api/strategies`),
-                    fetch(`${API_URL}/api/strategies/positions`)
+                    fetch(`${API_URL}/api/strategies/positions`),
+                    fetch(`${API_URL}/api/strategies/analytics`)
                 ]);
 
                 setStats(await statsRes.json());
                 setStrategies(await stratRes.json());
                 setPositions(await posRes.json());
+                setAnalytics(await analyticsRes.json());
             } catch (e) {
                 console.error('Failed to load strategy data', e);
             } finally {
@@ -124,6 +149,39 @@ export default function StrategyPage() {
                 </div>
             </div>
 
+            {/* ANALYTICS DASHBOARD */}
+            <section className="mb-16 md:mb-24">
+                <h2 className="text-2xl font-light uppercase tracking-tight text-white mb-8">
+                    Performance Analytics
+                    <span className="text-zinc-600 text-xs ml-4 font-mono tracking-widest">HEDGE FUND VIEW</span>
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <AnalyticsCard title="Risk Profile" subtitle="Win rate by entry price">
+                        {analytics ? (
+                            <RiskProfileChart data={analytics.riskProfile} />
+                        ) : (
+                            <div className="h-32 animate-pulse bg-zinc-900/50" />
+                        )}
+                    </AnalyticsCard>
+
+                    <AnalyticsCard title="Speed Profile" subtitle="Avg ROI by holding time">
+                        {analytics ? (
+                            <SpeedProfileChart data={analytics.speedProfile} />
+                        ) : (
+                            <div className="h-32 animate-pulse bg-zinc-900/50" />
+                        )}
+                    </AnalyticsCard>
+
+                    <AnalyticsCard title="Cumulative PnL" subtitle="Performance over time">
+                        {analytics ? (
+                            <PnLChart data={analytics.pnlHistory} />
+                        ) : (
+                            <div className="h-32 animate-pulse bg-zinc-900/50" />
+                        )}
+                    </AnalyticsCard>
+                </div>
+            </section>
+
             {/* STRATEGIES GRID */}
             <section className="mb-24">
                 <h2 className="text-2xl font-light uppercase tracking-tight text-white mb-8">Active Strategies</h2>
@@ -141,13 +199,20 @@ export default function StrategyPage() {
 
             {/* POSITIONS TABLE */}
             <section>
-                <div className="flex justify-between items-end mb-8">
-                    <h2 className="text-2xl font-light uppercase tracking-tight text-white">
-                        Paper Positions
-                        <span className="text-zinc-500 text-sm ml-4 font-mono tracking-widest">
-                            {selectedStrategyId ? '(FILTERED)' : '(ALL)'}
-                        </span>
-                    </h2>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-8">
+                    <div>
+                        <h2 className="text-2xl font-light uppercase tracking-tight text-white mb-4">
+                            Paper Positions
+                            <span className="text-zinc-500 text-sm ml-4 font-mono tracking-widest">
+                                ({filteredPositions.length})
+                            </span>
+                        </h2>
+                        <Tabs
+                            tabs={['ACTIVE', 'HISTORY']}
+                            activeTab={activeTab}
+                            onTabChange={(tab) => setActiveTab(tab as 'ACTIVE' | 'HISTORY')}
+                        />
+                    </div>
                     {selectedStrategyId && (
                         <button
                             onClick={() => setSelectedStrategyId(null)}
@@ -162,7 +227,7 @@ export default function StrategyPage() {
                     <table className="w-full text-left text-sm font-mono min-w-[800px]">
                         <thead className="bg-zinc-900/50 text-zinc-500 uppercase tracking-wider text-xs border-b border-zinc-900">
                             <tr>
-                                <th className="p-4 font-semibold">Time</th>
+                                <th className="p-4 font-semibold">{activeTab === 'ACTIVE' ? 'Holding' : 'Time'}</th>
                                 <th className="p-4 font-semibold">Strategy</th>
                                 <th className="p-4 font-semibold">Market</th>
                                 <th className="p-4 font-semibold">Outcome</th>
@@ -176,7 +241,10 @@ export default function StrategyPage() {
                             {filteredPositions.map(p => (
                                 <tr key={p.id} className="hover:bg-zinc-900/20 transition-colors">
                                     <td className="p-4 text-zinc-500 whitespace-nowrap">
-                                        {new Date(p.openedAt).toLocaleTimeString()}
+                                        {activeTab === 'ACTIVE'
+                                            ? <span className="text-amber-400">{getHoldingTime(p.openedAt)}</span>
+                                            : new Date(p.openedAt).toLocaleTimeString()
+                                        }
                                     </td>
                                     <td className="p-4 text-zinc-300">{p.strategy.name}</td>
                                     <td className="p-4 text-zinc-400 max-w-[200px] truncate" title={p.marketSlug}>
