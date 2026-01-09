@@ -370,7 +370,8 @@ export class PolymarketIngestor {
                 amountUSD: volumeUSD,
                 isNewMarket: false,
                 price: price,
-                side: trade.side || 'BUY'
+                side: trade.side || 'BUY',
+                marketSlug: marketSlug  // For kill switch filtering
             };
 
             // [FIX] Fetch total signal count for Freshness Check
