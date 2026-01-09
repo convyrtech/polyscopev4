@@ -79,14 +79,31 @@ export class PaperTradingService {
                     }
                 }
 
+                // Position Size
+                const betSize = config.betSize || 100; // Default $100
+
+                // ================== BANKROLL MANAGEMENT ==================
+                // Pre-trade check: Insufficient funds
+                if (strategy.currentBalance < betSize) {
+                    console.log(`🚫 [Paper] Insufficient Funds for ${strategy.name}: $${strategy.currentBalance.toFixed(2)} < $${betSize}`);
+                    continue;
+                }
+
+                // Debit balance on entry
+                const newBalance = strategy.currentBalance - betSize;
+                await prisma.strategy.update({
+                    where: { id: strategy.id },
+                    data: { currentBalance: newBalance }
+                });
+                // Update local copy for subsequent checks in same batch
+                strategy.currentBalance = newBalance;
+                // ==========================================================
+
                 // Pessimistic Slippage (+1%)
                 // If we BUY, we pay more. 
                 // Price = signal.price * 1.01
                 let entryPrice = signal.price * (1 + (config.slippage || 0.01));
                 if (entryPrice > 0.99) entryPrice = 0.99; // Cap at 0.99
-
-                // Position Size
-                const amount = config.betSize || 100; // Default $100
 
                 // Create Position
                 await prisma.paperPosition.create({
@@ -96,13 +113,12 @@ export class PaperTradingService {
                         marketSlug: signal.marketSlug,
                         outcome: normalizedOutcome,
                         entryPrice: entryPrice,
-                        amount: amount,
+                        amount: betSize,
                         status: 'OPEN'
                     }
                 });
 
-                console.log('✅ [Paper] CREATING POSITION for:', strategy.name);
-                console.log(`📝 [PaperTrading] Opened Position for ${strategy.name}: ${normalizedOutcome} @ ${entryPrice.toFixed(2)}`);
+                console.log(`✅ [Paper] Opened for ${strategy.name}: ${normalizedOutcome} @ ${entryPrice.toFixed(2)} | Bet: $${betSize} | Balance: $${newBalance.toFixed(2)}`);
             }
         } catch (e: any) {
             console.error('❌ [PaperTrading] Entry Failed:', e.message);
@@ -220,7 +236,7 @@ export class PaperTradingService {
         }
     }
 
-    // Helper: Close Logic
+    // Helper: Close Logic (with Bankroll Credit)
     private async closePosition(pos: any, price: number, reason: string) {
         // Calculate PnL
         // Return = (Exit - Entry) / Entry
@@ -228,6 +244,10 @@ export class PaperTradingService {
         const roi = (price - pos.entryPrice) / pos.entryPrice;
         const pnl = pos.amount * roi;
 
+        // Credit back to strategy balance: original bet + PnL
+        const exitAmount = pos.amount + pnl;
+
+        // Update position
         await prisma.paperPosition.update({
             where: { id: pos.id },
             data: {
@@ -239,6 +259,12 @@ export class PaperTradingService {
             }
         });
 
-        console.log(`💰 [PaperTrading] Closed ${pos.id} (${reason}): PnL $${pnl.toFixed(2)} (${(roi * 100).toFixed(1)}%)`);
+        // Credit balance back to strategy
+        await prisma.strategy.update({
+            where: { id: pos.strategyId },
+            data: { currentBalance: { increment: exitAmount } }
+        });
+
+        console.log(`💰 [PaperTrading] Closed ${pos.id} (${reason}): PnL $${pnl.toFixed(2)} (${(roi * 100).toFixed(1)}%) | Credited: $${exitAmount.toFixed(2)}`);
     }
 }

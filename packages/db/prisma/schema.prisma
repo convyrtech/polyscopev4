@@ -85,11 +85,13 @@ model Watchlist {
 
 // 5. Strategy Lab (Paper Trading)
 model Strategy {
-  id        String   @id @default(cuid())
-  name      String
-  status    String   @default("ACTIVE") // ACTIVE, PAUSED
-  config    Json     // { "takeProfit": 1.5, "stopLoss": 0.8, "whales": ["0x..."] }
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  name           String
+  status         String   @default("ACTIVE") // ACTIVE, PAUSED
+  config         Json     // { "takeProfit": 1.5, "stopLoss": 0.8, "whales": ["0x..."] }
+  initialBudget  Float    @default(10000)  // Starting capital
+  currentBalance Float    @default(10000)  // Available funds
+  createdAt      DateTime @default(now())
   
   positions PaperPosition[]
 }

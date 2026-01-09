@@ -6,6 +6,8 @@ interface Strategy {
     status: string;
     config: any;
     totalPnL: number;
+    initialBudget: number;
+    currentBalance: number;
 }
 
 interface StrategyCardProps {
@@ -23,6 +25,17 @@ export function StrategyCard({ strategy, isSelected, onClick }: StrategyCardProp
     const getPnLColor = (val: number | null) => {
         if (!val) return 'text-zinc-500';
         return val > 0 ? 'text-emerald-400' : val < 0 ? 'text-rose-400' : 'text-zinc-300';
+    };
+
+    // Fuel Gauge: currentBalance / initialBudget
+    const fuelPercent = strategy.initialBudget > 0
+        ? Math.max(0, Math.min(100, (strategy.currentBalance / strategy.initialBudget) * 100))
+        : 0;
+
+    const getFuelColor = () => {
+        if (fuelPercent > 50) return 'bg-emerald-500';
+        if (fuelPercent > 25) return 'bg-amber-500';
+        return 'bg-rose-500';
     };
 
     return (
@@ -56,9 +69,31 @@ export function StrategyCard({ strategy, isSelected, onClick }: StrategyCardProp
                     <span>TP: {strategy.config?.takeProfit ? `+${strategy.config.takeProfit * 100}%` : '-'}</span>
                     <span>SL: {strategy.config?.stopLoss ? `-${strategy.config.stopLoss * 100}%` : '-'}</span>
                 </div>
+
+                {/* Fuel Gauge */}
+                <div className="pt-2">
+                    <div className="flex justify-between text-xs mb-1">
+                        <span className="text-zinc-600">Budget</span>
+                        <span className={getPnLColor(strategy.currentBalance - strategy.initialBudget)}>
+                            {formatCurrency(strategy.currentBalance)} / {formatCurrency(strategy.initialBudget)}
+                        </span>
+                    </div>
+                    <div className="h-1.5 bg-zinc-800 relative overflow-hidden">
+                        <div
+                            className={`absolute h-full transition-all duration-500 ${getFuelColor()}`}
+                            style={{ width: `${fuelPercent}%` }}
+                        />
+                    </div>
+                </div>
+
                 <div className="flex justify-between border-t border-zinc-900 pt-2 mt-2">
-                    <span className="group-hover:text-zinc-400 transition-colors">Total PnL:</span>
-                    <span className={getPnLColor(strategy.totalPnL)}>{formatCurrency(strategy.totalPnL)}</span>
+                    <span className="group-hover:text-zinc-400 transition-colors">ROI:</span>
+                    <span className={getPnLColor(strategy.currentBalance - strategy.initialBudget)}>
+                        {strategy.initialBudget > 0
+                            ? `${(((strategy.currentBalance - strategy.initialBudget) / strategy.initialBudget) * 100).toFixed(1)}%`
+                            : '-'
+                        }
+                    </span>
                 </div>
             </div>
         </div>
