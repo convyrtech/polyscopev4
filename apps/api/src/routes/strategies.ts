@@ -68,14 +68,16 @@ strategies.get('/', async (c) => {
     }
 });
 
-// GET /positions - List Positions (Active + History)
+// GET /positions - List Positions (supports ?status=OPEN or ?status=CLOSED filter)
 strategies.get('/positions', async (c) => {
     try {
+        const statusFilter = c.req.query('status'); // 'OPEN', 'CLOSED', or undefined (all)
+
         const positions = await prisma.paperPosition.findMany({
+            where: statusFilter ? { status: statusFilter } : undefined,
             take: 100,
             orderBy: [
-                { status: 'desc' },      // OPEN first
-                { openedAt: 'desc' }    // Then newest
+                { openedAt: 'desc' }    // Newest first
             ],
             include: { strategy: { select: { name: true } } }
         });

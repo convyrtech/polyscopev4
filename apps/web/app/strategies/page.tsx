@@ -63,13 +63,10 @@ export default function StrategyPage() {
         }
     };
 
-    // Filter Logic: First by tab (ACTIVE/HISTORY), then by strategy
-    const tabFilteredPositions = positions.filter(p =>
-        activeTab === 'ACTIVE' ? p.status === 'OPEN' : p.status === 'CLOSED'
-    );
+    // Filter Logic: API already filters by status, just filter by strategy if selected
     const filteredPositions = selectedStrategyId
-        ? tabFilteredPositions.filter(p => p.strategyId === selectedStrategyId)
-        : tabFilteredPositions;
+        ? positions.filter(p => p.strategyId === selectedStrategyId)
+        : positions;
 
     // Helper: Calculate holding time for active positions
     const getHoldingTime = (openedAt: string) => {
@@ -84,10 +81,13 @@ export default function StrategyPage() {
     useEffect(() => {
         const fetchData = async () => {
             try {
+                // Fetch positions based on active tab (OPEN for ACTIVE, CLOSED for HISTORY)
+                const statusParam = activeTab === 'ACTIVE' ? 'OPEN' : 'CLOSED';
+
                 const [statsRes, stratRes, posRes, analyticsRes] = await Promise.all([
                     fetch(`${API_URL}/api/strategies/stats`),
                     fetch(`${API_URL}/api/strategies`),
-                    fetch(`${API_URL}/api/strategies/positions`),
+                    fetch(`${API_URL}/api/strategies/positions?status=${statusParam}`),
                     fetch(`${API_URL}/api/strategies/analytics`)
                 ]);
 
@@ -105,7 +105,7 @@ export default function StrategyPage() {
         fetchData();
         const interval = setInterval(fetchData, 5000); // 5s Poll
         return () => clearInterval(interval);
-    }, []);
+    }, [activeTab]); // Re-fetch when tab changes
 
     const formatCurrency = (val: number | null) => {
         if (val === null || val === undefined) return '-';
