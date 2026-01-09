@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface RiskProfileData {
     bucket: string;
@@ -48,7 +49,7 @@ export function RiskProfileChart({ data }: { data: RiskProfileData[] }) {
     return (
         <div className="space-y-3">
             {data.map((item) => (
-                <div key={item.bucket} className="group">
+                <div key={item.bucket}>
                     <div className="flex justify-between text-xs mb-1">
                         <span className="font-mono text-zinc-400">${item.bucket}</span>
                         <span className="font-mono">
@@ -59,12 +60,10 @@ export function RiskProfileChart({ data }: { data: RiskProfileData[] }) {
                         </span>
                     </div>
                     <div className="h-2 bg-zinc-800 relative overflow-hidden">
-                        {/* Total trades bar */}
                         <div
                             className="absolute h-full bg-zinc-700 transition-all duration-500"
                             style={{ width: `${(item.trades / maxTrades) * 100}%` }}
                         />
-                        {/* Wins bar overlay */}
                         <div
                             className={`absolute h-full transition-all duration-500 ${item.winRate >= 50 ? 'bg-emerald-500/70' : 'bg-rose-500/70'}`}
                             style={{ width: `${(item.wins / maxTrades) * 100}%` }}
@@ -76,45 +75,46 @@ export function RiskProfileChart({ data }: { data: RiskProfileData[] }) {
     );
 }
 
-// Speed profile with ROI indicators
+// Speed profile with vertical layout (label + bar stacked)
 export function SpeedProfileChart({ data }: { data: SpeedProfileData[] }) {
+    const maxROI = Math.max(...data.map(d => Math.abs(d.avgROI)), 50);
+
     return (
         <div className="space-y-4">
             {data.map((item) => (
-                <div key={item.duration} className="flex items-center justify-between">
-                    <span className="font-mono text-sm text-zinc-400 w-16">{item.duration}</span>
-                    <div className="flex-1 mx-4 h-1 bg-zinc-800 relative">
+                <div key={item.duration} className="space-y-1">
+                    {/* Label row */}
+                    <div className="flex justify-between text-xs">
+                        <span className="font-mono text-zinc-400">{item.duration}</span>
+                        <span className="font-mono">
+                            <span className={item.avgROI >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                {item.avgROI >= 0 ? '+' : ''}{item.avgROI}%
+                            </span>
+                            <span className="text-zinc-600 ml-2">({item.count})</span>
+                        </span>
+                    </div>
+                    {/* Bar */}
+                    <div className="h-2 bg-zinc-800 relative overflow-hidden">
                         <div
-                            className={`absolute h-full ${item.avgROI >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                            className={`absolute h-full transition-all duration-500 ${item.avgROI >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}
                             style={{
-                                width: `${Math.min(Math.abs(item.avgROI), 100)}%`,
-                                left: item.avgROI >= 0 ? '50%' : `${50 - Math.min(Math.abs(item.avgROI), 50)}%`
+                                width: `${Math.min((Math.abs(item.avgROI) / maxROI) * 100, 100)}%`
                             }}
                         />
-                        <div className="absolute left-1/2 w-[2px] h-3 -top-1 bg-zinc-600" />
                     </div>
-                    <span className={`font-mono text-sm w-20 text-right ${item.avgROI >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {item.avgROI >= 0 ? '+' : ''}{item.avgROI}%
-                    </span>
-                    <span className="text-zinc-600 text-xs font-mono w-12 text-right">({item.count})</span>
                 </div>
             ))}
         </div>
     );
 }
 
-// Simple line chart for PnL history (pure CSS)
+// Recharts Area Chart for PnL history
 export function PnLChart({ data }: { data: PnLHistoryData[] }) {
     if (data.length === 0) {
         return <div className="text-zinc-600 text-sm font-mono text-center py-8">No history yet</div>;
     }
 
-    const values = data.map(d => d.cumulativePnL);
-    const max = Math.max(...values, 0);
-    const min = Math.min(...values, 0);
-    const range = max - min || 1;
-
-    const latestPnL = values[values.length - 1] || 0;
+    const latestPnL = data[data.length - 1]?.cumulativePnL || 0;
     const isPositive = latestPnL >= 0;
 
     return (
@@ -124,37 +124,43 @@ export function PnLChart({ data }: { data: PnLHistoryData[] }) {
                 {isPositive ? '+' : ''}${latestPnL.toFixed(2)}
             </div>
 
-            {/* Chart */}
-            <div className="h-24 flex items-end gap-1">
-                {data.map((item, i) => {
-                    const height = ((item.cumulativePnL - min) / range) * 100;
-                    return (
-                        <div
-                            key={item.date}
-                            className="flex-1 group relative"
-                            style={{ minWidth: '4px' }}
-                        >
-                            <div
-                                className={`w-full transition-all duration-300 ${item.cumulativePnL >= 0 ? 'bg-emerald-500/60' : 'bg-rose-500/60'} group-hover:opacity-100 opacity-80`}
-                                style={{ height: `${Math.max(height, 2)}%` }}
-                            />
-                            {/* Tooltip on hover */}
-                            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block bg-black border border-zinc-700 px-2 py-1 text-xs whitespace-nowrap z-10">
-                                <div className="text-zinc-400">{item.date}</div>
-                                <div className={item.cumulativePnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                                    ${item.cumulativePnL.toFixed(2)}
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-
-            {/* Date range */}
-            <div className="flex justify-between text-xs text-zinc-600 font-mono mt-2">
-                <span>{data[0]?.date}</span>
-                <span>{data[data.length - 1]?.date}</span>
-            </div>
+            {/* Recharts Area Chart */}
+            <ResponsiveContainer width="100%" height={100}>
+                <AreaChart data={data} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                    <defs>
+                        <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={isPositive ? '#10b981' : '#f43f5e'} stopOpacity={0.8} />
+                            <stop offset="95%" stopColor={isPositive ? '#10b981' : '#f43f5e'} stopOpacity={0.1} />
+                        </linearGradient>
+                    </defs>
+                    <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 10, fill: '#52525b' }}
+                        axisLine={{ stroke: '#27272a' }}
+                        tickLine={false}
+                        interval="preserveStartEnd"
+                    />
+                    <YAxis hide />
+                    <Tooltip
+                        contentStyle={{
+                            backgroundColor: '#000',
+                            border: '1px solid #3f3f46',
+                            borderRadius: '0',
+                            fontSize: '12px'
+                        }}
+                        labelStyle={{ color: '#71717a' }}
+                        formatter={(value) => [`$${Number(value || 0).toFixed(2)}`, 'PnL']}
+                    />
+                    <Area
+                        type="monotone"
+                        dataKey="cumulativePnL"
+                        stroke={isPositive ? '#10b981' : '#f43f5e'}
+                        strokeWidth={2}
+                        fill="url(#colorPnL)"
+                    />
+                </AreaChart>
+            </ResponsiveContainer>
         </div>
     );
 }
+
