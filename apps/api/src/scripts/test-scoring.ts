@@ -15,13 +15,13 @@ async function main() {
             await prisma.whale.upsert({
                 where: { address: addr },
                 update: {
-                    totalTrades: 0, // Reset for test
+                    // totalTrades not in DB schema, only in WhaleData interface
                     pnl: data.pnl,
                     winrate: data.winrate
                 },
                 create: {
                     address: addr,
-                    totalTrades: 0,
+                    // totalTrades not in DB schema
                     pnl: data.pnl,
                     winrate: data.winrate,
                     tags: 'TEST_DATA'
@@ -42,7 +42,7 @@ async function main() {
     console.log(`   Result: ${score1} (Expected 100)\n`);
 
     // Scenario 2: Old Whale (20 trades), Small Volume ($100)
-    // Expected: Base(50) = 50
+    // Expected: Base(50) + NoBonus = 50
     const oldWhale: WhaleData = { pnl: 0, winrate: 0.5, totalTrades: 20 };
     const smallTrade: TradeData = { amountUSD: 100, isNewMarket: false, price: 0.5, side: 'BUY' };
 
@@ -54,6 +54,7 @@ async function main() {
 
     // Scenario 3: Mega Whale (0 trades), Hugo Volume ($50k)
     // Expected: Base(50) + Fresh(40) + Vol(40) = 130 -> Cap 100
+    const megaTrade: TradeData = { amountUSD: 50000, isNewMarket: false, price: 0.5, side: 'BUY' };
     await ensureWhale('0xMegaWhale', freshWhale);
 
     console.log('👉 Scenario 3: Fresh Whale + $50k Buy');
