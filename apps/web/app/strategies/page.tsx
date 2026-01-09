@@ -20,6 +20,8 @@ interface Strategy {
     status: string;
     config: any;
     totalPnL: number;
+    initialBudget: number;
+    currentBalance: number;
 }
 
 interface Position {
