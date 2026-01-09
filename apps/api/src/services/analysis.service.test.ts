@@ -4,7 +4,7 @@ import { AnalysisService, WhaleData, TradeData, TradePattern } from './analysis.
 describe('AnalysisService', () => {
     const service = new AnalysisService();
 
-    it('Case A: High PnL Whale + Large Bet = High Score (> 80)', () => {
+    it('Case A: High PnL Whale + Large Bet = High Score (> 80)', async () => {
         const whale: WhaleData = {
             pnl: 50000,    // +$50k
             winrate: 0.75, // 75%
@@ -17,11 +17,11 @@ describe('AnalysisService', () => {
             side: 'BUY'
         };
 
-        const score = service.calculateScore(whale, trade);
+        const score = await service.calculateScore(whale, trade);
         expect(score).toBeGreaterThan(80);
     });
 
-    it('Case B: Negative PnL Whale = Low Score (< 20)', () => {
+    it('Case B: Negative PnL Whale = Low Score (< 20)', async () => {
         const whale: WhaleData = {
             pnl: -20000,   // -$20k
             winrate: 0.30, // 30%
@@ -34,11 +34,11 @@ describe('AnalysisService', () => {
             side: 'BUY'
         };
 
-        const score = service.calculateScore(whale, trade);
+        const score = await service.calculateScore(whale, trade);
         expect(score).toBeLessThan(20);
     });
 
-    it('Case C: New Whale (No history) = Neutral Score (approx 50-60)', () => {
+    it('Case C: New Whale (No history) = Neutral Score (approx 50-60)', async () => {
         const whale: WhaleData = {
             pnl: 0,
             winrate: 0,
@@ -51,12 +51,12 @@ describe('AnalysisService', () => {
             side: 'BUY'
         };
 
-        const score = service.calculateScore(whale, trade);
+        const score = await service.calculateScore(whale, trade);
         expect(score).toBeGreaterThanOrEqual(50);
         expect(score).toBeLessThan(70);
     });
 
-    it('Case D: "Sniper" (First trade in market) = Bonus points', () => {
+    it('Case D: "Sniper" (First trade in market) = Bonus points', async () => {
         const whale: WhaleData = {
             pnl: 0,
             winrate: 0,
@@ -75,8 +75,8 @@ describe('AnalysisService', () => {
             side: 'BUY'
         };
 
-        const normalScore = service.calculateScore(whale, normalTrade);
-        const sniperScore = service.calculateScore(whale, sniperTrade);
+        const normalScore = await service.calculateScore(whale, normalTrade);
+        const sniperScore = await service.calculateScore(whale, sniperTrade);
 
         expect(sniperScore).toBeGreaterThan(normalScore);
     });
