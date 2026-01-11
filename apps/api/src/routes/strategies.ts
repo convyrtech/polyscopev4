@@ -1,8 +1,7 @@
 import { Hono } from 'hono';
-import { PrismaClient } from '@whalescope/db';
+import { prisma } from '@whalescope/db';
 
 const strategies = new Hono();
-const prisma = new PrismaClient();
 
 // GET /stats - Dashboard Agreggates
 strategies.get('/stats', async (c) => {

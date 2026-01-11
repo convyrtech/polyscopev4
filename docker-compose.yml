@@ -6,9 +6,14 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: whale
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: whalescope
+      POSTGRES_USER: ${POSTGRES_USER:-whale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-whalescope}
     volumes:
       - ./docker-data/postgres:/var/lib/postgresql/data
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whale -d whalescope"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

@@ -33,9 +33,18 @@ model Whale {
   // Tags
   tags      String   @default("") // Comma-separated: "Smart,Insider,HighRoller"
 
+  // Funding analysis (added for insider detection)
+  fundingAnalyzedAt DateTime?
+  fundingSource     String?
+  fundingSourceTag  String?
+
   // Relations
   signals   Signal[]
   followers Watchlist[]
+
+  // Indexes for common queries
+  @@index([lastActive])
+  @@index([score])
 }
 
 // 3. Signals (Trades/Bets)
@@ -68,8 +77,12 @@ model Signal {
   whale           Whale    @relation(fields: [whaleAddress], references: [address])
   positions       PaperPosition[]
 
+  // Indexes for common queries
   @@index([marketSlug])
   @@index([timestamp])
+  @@index([whaleAddress])
+  @@index([status])
+  @@index([whaleAddress, status])
 }
 
 // 4. Watchlist (User -> Whale)

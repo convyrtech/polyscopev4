@@ -1,8 +1,9 @@
 {
     "name": "extension",
     "displayName": "WhaleScope X-Ray",
-    "version": "0.0.1",
-    "description": "Polymarket Whale Analysis Overlay",
+    "version": "0.1.0",
+    "description": "Polymarket Whale Analysis Overlay - Track smart money in real-time",
+    "author": "WhaleScope Team",
     "scripts": {
         "dev": "plasmo dev",
         "build": "plasmo build",
@@ -15,6 +16,7 @@
         "recharts": "^3.6.0"
     },
     "devDependencies": {
+        "@types/chrome": "^0.0.268",
         "@types/node": "20.11.5",
         "@types/react": "18.2.48",
         "@types/react-dom": "18.2.18",
@@ -33,6 +35,10 @@
         "host_permissions": [
             "https://polymarket.com/*",
             "https://whalescope.87.120.186.161.sslip.io/*"
-        ]
+        ],
+        "action": {
+            "default_popup": "popup.html",
+            "default_title": "WhaleScope X-Ray"
+        }
     }
 }

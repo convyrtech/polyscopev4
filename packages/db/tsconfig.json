@@ -5,6 +5,10 @@
             "ES2015"
         ],
         "module": "commonjs",
-        "target": "ES2015"
-    }
+        "target": "ES2015",
+        "outDir": "./dist",
+        "declaration": true,
+        "declarationMap": true
+    },
+    "include": ["index.ts"]
 }

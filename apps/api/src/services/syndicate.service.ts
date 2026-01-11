@@ -1,6 +1,4 @@
-import { PrismaClient } from '@whalescope/db';
-
-const prisma = new PrismaClient();
+import { prisma } from '@whalescope/db';
 
 interface TrackedTrade {
     wallet: string;

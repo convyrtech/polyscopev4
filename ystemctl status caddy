@@ -1,0 +1,20 @@
+[0;1;31m×[0m caddy.service - Caddy
+     Loaded: loaded (]8;;file://polyscopev4.play2go.cloud/usr/lib/systemd/system/caddy.service/usr/lib/systemd/system/caddy.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;31mfailed[0m (Result: exit-code) since Wed 2026-01-07 11:04:38 UTC; 49s ago
+   Duration: 2.676s
+       Docs: ]8;;https://caddyserver.com/docs/https://caddyserver.com/docs/]8;;
+    Process: 82505 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile [0;1;31m(code=exited, status=1/FAILURE)[0m
+   Main PID: 82505 (code=exited, status=1/FAILURE)
+     Status: "[0;1;36mloading new config: setting up custom log 'log0': opening log writer using &logging.FileWriter{Filename:"/var/log/caddy/whalescope.log", Mode:0x0, Roll:(*bool)(nil), RollSizeMB:0, RollCompress:(*bool)(nil), RollLocalTime:false, RollKeep:0, RollKeepDays:0}: open /var/log/caddy/whalescope.log: permission denied[0m"
+        CPU: 57ms
+
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: MEMORY_PRESSURE_WATCH=/sys/fs/cgroup/system.slice/caddy.service/memory.pressure
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: MEMORY_PRESSURE_WRITE=c29tZSAyMDAwMDAgMjAwMDAwMAA=
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: {"level":"info","ts":1767783878.566464,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: {"level":"info","ts":1767783878.5674734,"msg":"adapted config to JSON","adapter":"caddyfile"}
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: {"level":"warn","ts":1767783878.5675445,"msg":"Caddyfile input is not formatted; run 'caddy fmt --overwrite' to fix inconsistencies","adapter":"caddyfile","file":"/etc/caddy/Caddyfile","line":5}
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: {"level":"info","ts":1767783878.5680804,"msg":"maxprocs: No GOMAXPROCS change to reset"}
+Jan 07 11:04:38 polyscopev4.play2go.cloud caddy[82505]: Error: loading initial config: loading new config: setting up custom log 'log0': opening log writer using &logging.FileWriter{Filename:"/var/log/caddy/whalescope.log", Mode:0x0, Roll:(*bool)(nil), RollSizeMB:0, RollCompress:(*bool)(nil), RollLocalTime:false, RollKeep:0, RollKeepDays:0}: open /var/log/caddy/whalescope.log: permission denied
+Jan 07 11:04:38 polyscopev4.play2go.cloud systemd[1]: [0;1;39m[0;1;31m[0;1;39mcaddy.service: Main process exited, code=exited, status=1/FAILURE[0m
+Jan 07 11:04:38 polyscopev4.play2go.cloud systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mcaddy.service: Failed with result 'exit-code'.[0m
+Jan 07 11:04:38 polyscopev4.play2go.cloud systemd[1]: [0;1;31m[0;1;39m[0;1;31mFailed to start caddy.service - Caddy.[0m

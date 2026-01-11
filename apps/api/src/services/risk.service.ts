@@ -2,8 +2,12 @@
 // import { Logger } from '../lib/logger';
 
 export class RiskService {
-    private readonly BANKROLL = 10000; // Example fixed bankroll
+    private readonly BANKROLL: number;
     private readonly MAX_CAP_PERCENT = 0.05; // 5% Hard Cap
+
+    constructor() {
+        this.BANKROLL = Number(process.env.PAPER_BANKROLL) || 10000;
+    }
 
     /**
      * Calculates the optimal bet size using Quarter Kelly.

@@ -1,12 +1,13 @@
-import { PrismaClient } from '@whalescope/db';
+import { prisma } from '@whalescope/db';
 import axios from 'axios';
 import { PaperTradingService } from './paper-trading.service';
+import { ProfilerService } from './profiler.service';
 
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
-const prisma = new PrismaClient();
 
 export class ResolutionService {
     private paperTradingService = PaperTradingService.getInstance();
+    private profilerService = ProfilerService.getInstance();
 
     /**
      * Main loop to resolve Open Signals.
@@ -132,6 +133,9 @@ export class ResolutionService {
 
         // [NEW] Settle Paper Trading Positions
         await this.paperTradingService.onMarketResolved(slug, winningOutcome);
+
+        // [NEW] Profile all participants after resolution
+        await this.profilerService.profileMarketParticipants(slug);
     }
 
     private async updateWhaleStats(address: string, won: boolean, tradeRoi: number) {
@@ -139,34 +143,44 @@ export class ResolutionService {
         const whale = await prisma.whale.findUnique({ where: { address } });
         if (!whale) return;
 
-        // Simple Rolling Average for Winrate
-        // We'd ideally track totalSignals count, but let's approximate or use a separate counter
-        // For zero-budget, let's just increment PnL and nudge Winrate.
-
-        // Better: Recalculate from full history? 
-        // "Zero-Budget" -> DB is local and fast. Let's recalculate accurately.
-
-        const history = await prisma.signal.aggregate({
-            where: { whaleAddress: address, status: { in: ['WON', 'LOST'] } },
-            _count: true,
-            _sum: { roi: true } // Crude PnL proxy
+        // ================================================================
+        // CALCULATE REAL PnL FROM ALL RESOLVED SIGNALS
+        // PnL = Sum of (amountUSD * (roi / 100))
+        // ================================================================
+        
+        // Get all resolved signals for this whale
+        const resolvedSignals = await prisma.signal.findMany({
+            where: { 
+                whaleAddress: address, 
+                status: { in: ['WON', 'LOST'] } 
+            },
+            select: { amountUSD: true, roi: true }
         });
 
-        const wins = await prisma.signal.count({
-            where: { whaleAddress: address, status: 'WON' }
-        });
+        // Calculate actual dollar PnL
+        let totalPnL = 0;
+        let wins = 0;
+        const total = resolvedSignals.length;
 
-        const total = history._count;
+        for (const sig of resolvedSignals) {
+            if (sig.roi !== null && sig.roi !== undefined) {
+                // For WON: roi is positive (profit %)
+                // For LOST: roi is -100 (lost entire bet)
+                totalPnL += sig.amountUSD * (sig.roi / 100);
+            }
+            if (sig.roi !== null && sig.roi > 0) {
+                wins++;
+            }
+        }
+
         const newWinrate = total > 0 ? (wins / total) * 100 : 0;
 
-        // PnL: Sum of (Amount * ROI%)? 
-        // We stored 'amountUSD'. Net Profit = Amount * (ROI/100).
-        // Let's do a raw SQL generic or just manual sum?
-        // Let's stick to simple winrate updates for now to be safe.
+        console.log(`📊 [Resolution] Updating ${address.substring(0, 10)}... | PnL: $${totalPnL.toFixed(2)} | WR: ${newWinrate.toFixed(1)}% (${wins}/${total})`);
 
         await prisma.whale.update({
             where: { address },
             data: {
+                pnl: totalPnL,
                 winrate: newWinrate,
                 lastAnalyzed: new Date()
             }

@@ -1,9 +1,14 @@
+// ============================================================================
+// ALPHA MATRIX v2 - Sophisticated Whale Signal Scoring Engine
+// Now uses REAL data from Polymarket API (closed positions only)
+// ============================================================================
 
-import { PrismaClient } from '@whalescope/db';
+import { prisma } from '@whalescope/db';
 import logger from '../lib/logger';
 import { SyndicateService } from './syndicate.service';
+import { fundingService, FundingAnalysis } from './funding.service';
+import { polymarketDataService, ReliableStats } from './polymarket-data.service';
 
-const prisma = new PrismaClient();
 const syndicateService = SyndicateService.getInstance();
 
 export interface WhaleData {
@@ -25,49 +30,68 @@ export interface TradeData {
     isNewMarket: boolean;
     price: number;
     side: 'BUY' | 'SELL';
-    marketSlug?: string;  // For kill switch filtering
-    outcome?: string;     // For syndicate detection
+    marketSlug?: string;
+    outcome?: string;
 }
 
 // ============================================================================
-// KILL SWITCH CONSTANTS
+// THRESHOLDS (Unified constants)
 // ============================================================================
+const MIN_TRADE_AMOUNT = 500;
+const SNIPER_WINRATE = 65;
+const LOSER_WINRATE = 40;
+const MIN_TRADES_FOR_EVAL = 10;
+const SHARK_PNL_THRESHOLD = 10000;
+const FRESH_WALLET_MAX_TRADES = 3;
+const FRESH_WALLET_VOLUME_THRESHOLD = 2000;
+
+// Anti-bot thresholds
+// WASH TRADER: High volume but near-zero profit (market making bots)
+// ROI is a decimal (0.02 = 2%), not percent
+const WASH_TRADER_MIN_VOLUME = 100000;
+const WASH_TRADER_MAX_ROI = 0.02; // 2% ROI threshold (was incorrectly 2 = 200%)
+
+// SPAMMER: Many tiny trades (dust attack bots)
+const SPAMMER_MIN_TRADES = 50;
+const SPAMMER_MAX_AVG_BET = 10;
+
+// Sports keywords for market classification
 const SPORTS_KEYWORDS = [
-    // ... (keywords same as before)
-    'nba', 'nfl', 'nhl', 'mlb', 'mls',
-    'tennis', 'atp', 'wta',
-    'soccer', 'football', 'premier-league', 'bundesliga', 'serie-a', 'la-liga', 'champions-league',
-    'ufc', 'mma', 'boxing',
-    'cricket', 'ipl',
-    'f1', 'formula', 'nascar',
-    'golf', 'pga',
-    'hockey', 'baseball', 'basketball',
-    'esports', 'cs2', 'dota', 'lol',
-    'game-', '-game', 'match', 'vs-', '-vs'
+    'nba', 'nfl', 'mlb', 'nhl', 'ufc', 'premier-league', 'la-liga', 
+    'champions-league', 'world-cup', 'super-bowl', 'boxing', 'mma', 
+    'tennis', 'golf', 'formula-1', 'f1', 'cricket', 'rugby',
+    'basketball', 'football', 'soccer', 'hockey', 'baseball'
 ];
 
-const MIN_TRADE_AMOUNT = 500; // Liquidity Gate: $500 minimum
-
 export class AnalysisService {
-    /**
-     * Check if market slug indicates a sports event
-     */
     private isSportsMarket(slug: string): boolean {
         const lowerSlug = slug.toLowerCase();
-        return SPORTS_KEYWORDS.some(keyword => lowerSlug.includes(keyword));
+        return SPORTS_KEYWORDS.some((keyword: string) => lowerSlug.includes(keyword));
     }
 
+    /**
+     * ========================================================================
+     * ALPHA MATRIX SCORE CALCULATOR
+     * ========================================================================
+     * Weights: Performance (Track Record) + Insider Score (Funding) + Volume
+     * 
+     * VALIDATION RULES:
+     * - Hamster (WR<40%) buying $10k → Score 0 (KILL)
+     * - Sniper (WR≥65%) buying $500 → Score 90+ (TRUST)
+     * - Fresh Wallet from Tornado → Score 100 (MAX ALERT)
+     */
     async calculateScore(whale: WhaleData, trade: TradeData, whaleAddress?: string): Promise<number> {
         const marketSlug = trade.marketSlug || '';
         const outcome = trade.outcome || '';
 
-        const debugLog: any = { market: marketSlug.substring(0, 30) };
+        // DEBUG: Log all incoming trades
+        console.log(`🔍 [Alpha] Eval: ${whaleAddress?.substring(0, 10)}... | $${trade.amountUSD.toFixed(0)} on ${marketSlug.substring(0, 30)}`);
 
         // ====================================================================
-        // PRIORITY INTERRUPT: SYNDICATE FORCE (Project 5X)
+        // PRIORITY INTERRUPT: SYNDICATE FORCE
         // ====================================================================
         if (marketSlug && outcome && syndicateService.isSyndicateActive(marketSlug, outcome)) {
-            logger.info(`🦅 [Score] FORCE 100: Syndicate Active on ${marketSlug} (${outcome})`);
+            logger.info(`🦅 [Alpha] SYNDICATE FORCE 100: ${marketSlug.substring(0, 30)}`);
             return 100;
         }
 
@@ -75,125 +99,203 @@ export class AnalysisService {
         // KILL SWITCH 1: LIQUIDITY GATE
         // ====================================================================
         if (trade.amountUSD < MIN_TRADE_AMOUNT) {
-            logger.info(`⛔ [Filter] Low Liquidity: $${trade.amountUSD.toFixed(0)} < $${MIN_TRADE_AMOUNT} | ${marketSlug.substring(0, 40)}`);
             return 0;
         }
 
         // ====================================================================
-        // KILL SWITCH 2: SPORTS FILTER (with Syndicate Bypass)
+        // KILL SWITCH 2: SPORTS FILTER
         // ====================================================================
         if (this.isSportsMarket(marketSlug)) {
-            // Check for syndicate activity - if multiple whales, it's valuable
             const isSyndicate = await syndicateService.isSyndicateMove(marketSlug);
+            if (!isSyndicate) return 0;
+        }
 
-            if (!isSyndicate) {
-                logger.info(`⛔ [Filter] Sports Event: ${marketSlug.substring(0, 50)} | No Syndicate`);
+        // ====================================================================
+        // STEP 1: FETCH REAL DATA FROM POLYMARKET API
+        // Uses ONLY closed-positions for reliable scoring
+        // ====================================================================
+        let realStats: ReliableStats | null = null;
+        let funding: FundingAnalysis | null = null;
+
+        if (whaleAddress) {
+            // Fetch REAL stats from Polymarket Data API
+            try {
+                console.log(`📊 [Alpha] Fetching Polymarket stats for ${whaleAddress.substring(0, 10)}...`);
+                realStats = await polymarketDataService.getReliableStats(whaleAddress);
+                console.log(`📊 [Alpha] Stats result: ${realStats.closedTrades} closed, WR=${realStats.winrate.toFixed(1)}%, PnL=$${realStats.realizedPnL.toFixed(0)}`);
+            } catch (e) {
+                console.error(`[Alpha] Polymarket stats fetch failed: ${e}`);
+            }
+
+            // Fetch funding source
+            try {
+                funding = await fundingService.analyzeFunding(whaleAddress);
+            } catch (e) {
+                logger.warn(`[Alpha] Funding fetch failed: ${e}`);
+            }
+        }
+
+        // ====================================================================
+        // ANTI-BOT LAYER: Kill Wash Traders & Spammers
+        // ====================================================================
+        if (realStats && realStats.isReliable) {
+            // KILL: Wash Trader (high volume, near-zero ROI)
+            if (realStats.totalVolume > WASH_TRADER_MIN_VOLUME) {
+                if (Math.abs(realStats.roi) < WASH_TRADER_MAX_ROI) {
+                    logger.info(`🤖 [Alpha] WASH TRADER KILL: ${whaleAddress?.substring(0, 10)}... | Vol=$${realStats.totalVolume.toFixed(0)} ROI=${(realStats.roi * 100).toFixed(2)}%`);
+                    return 0;
+                }
+            }
+
+            // KILL: Spammer (many tiny trades)
+            if (realStats.closedTrades > SPAMMER_MIN_TRADES && realStats.avgTradeSize < SPAMMER_MAX_AVG_BET) {
+                logger.info(`🤖 [Alpha] SPAMMER KILL: ${whaleAddress?.substring(0, 10)}... | ${realStats.closedTrades} trades, avg=$${realStats.avgTradeSize.toFixed(2)}`);
+                return 0;
+            }
+        }
+
+        // ====================================================================
+        // STEP 2A: PERFORMANCE SCORE (From REAL Polymarket Data)
+        // ====================================================================
+        let performanceScore = 50; // Neutral default
+        let performanceStatus: 'PROVEN' | 'LOSER' | 'UNKNOWN' = 'UNKNOWN';
+
+        if (realStats && realStats.isReliable) {
+            // HAMSTER KILL SWITCH: Ignore losers regardless of volume
+            if (realStats.winrate < LOSER_WINRATE) {
+                logger.info(`🐹 [Alpha] HAMSTER KILL: ${whaleAddress?.substring(0, 10)}... WR=${realStats.winrate.toFixed(1)}% (${realStats.closedTrades} closed) | $${trade.amountUSD.toFixed(0)} IGNORED`);
                 return 0;
             }
 
-            // Syndicate detected - allow but log
-            debugLog.syndicateBypass = true;
-            logger.info(`✅ [Syndicate] Sports ALLOWED: ${marketSlug.substring(0, 40)} | Multiple Whales`);
+            // SNIPER: High winrate = proven winner
+            if (realStats.winrate >= SNIPER_WINRATE) {
+                performanceScore = 100;
+                performanceStatus = 'PROVEN';
+            }
+            // DECENT: Moderate winrate
+            else if (realStats.winrate >= 50) {
+                performanceScore = 70;
+                performanceStatus = 'PROVEN';
+            }
+
+            // SHARK OVERRIDE: High realized PnL
+            if (realStats.realizedPnL >= SHARK_PNL_THRESHOLD) {
+                performanceScore = 100;
+                performanceStatus = 'PROVEN';
+            }
         }
 
         // ====================================================================
-        // SCORING LOGIC (Only reached if passed kill switches)
+        // STEP 2B: INSIDER SCORE (The Setup - Funding Source)
+        // Uses funding.scoreBoost from FundingService:
+        // - SUSPICIOUS_INSIDER: +40 (Tornado Cash = MAX ALPHA)
+        // - WHALE: +20 (whale-to-whale = interesting)
+        // - BRIDGE: +10 (obfuscating origin)
+        // - PROTOCOL: 0 (DeFi = neutral)
+        // - RETAIL: -10 (CEX direct = normie)
         // ====================================================================
-        let score = 50; // Base Score
-        debugLog.baseScore = 50;
+        let insiderScore = 50; // Neutral baseline (50 + boost)
 
-        // 1. Freshness Override (Aggressive)
-        if (whale.totalTrades <= 5) {
-            score += 40;
-            debugLog.freshnessBonus = 40;
+        if (funding) {
+            // Use scoreBoost from FundingService (proper value, not hardcoded)
+            insiderScore = 50 + funding.scoreBoost;
+            
+            // Clamp to 0-100
+            insiderScore = Math.max(0, Math.min(100, insiderScore));
+            
+            // Special case: SUSPICIOUS_INSIDER gets max score
+            if (funding.tag === 'SUSPICIOUS_INSIDER') {
+                insiderScore = 100;
+            }
         }
 
-        // 2. Volume Sensitivity
-        let volBonus = 0;
-        if (trade.amountUSD >= 10000) volBonus = 40;
-        else if (trade.amountUSD >= 5000) volBonus = 30;
-        else if (trade.amountUSD >= 1000) volBonus = 20;
-
-        if (volBonus > 0) {
-            score += volBonus;
-            debugLog.volumeBonus = volBonus;
+        // Fresh wallet bonus (if high volume)
+        const isFreshWallet = !realStats || realStats.closedTrades <= FRESH_WALLET_MAX_TRADES;
+        if (isFreshWallet && trade.amountUSD >= FRESH_WALLET_VOLUME_THRESHOLD) {
+            insiderScore = Math.max(insiderScore, 80);
         }
 
-        // 3. PnL Modifier
-        if (whale.pnl > 0) {
-            const bonus = Math.min(Math.floor(whale.pnl / 10000) * 10, 30);
-            score += bonus;
-            debugLog.pnlBonus = bonus;
-        } else if (whale.pnl < 0) {
-            const penalty = Math.min(Math.floor(Math.abs(whale.pnl) / 10000) * 20, 45);
-            score -= penalty;
-            debugLog.pnlPenalty = penalty;
+        // ====================================================================
+        // STEP 2C: VOLUME SIGNAL (The Conviction)
+        // ====================================================================
+        let volumeScore = 40; // Base
+
+        if (trade.amountUSD >= 50000) volumeScore = 100;
+        else if (trade.amountUSD >= 20000) volumeScore = 90;
+        else if (trade.amountUSD >= 10000) volumeScore = 80;
+        else if (trade.amountUSD >= 5000) volumeScore = 70;
+        else if (trade.amountUSD >= 2000) volumeScore = 60;
+        else if (trade.amountUSD >= 1000) volumeScore = 50;
+
+        // ====================================================================
+        // STEP 3: FINAL WEIGHTED LOGIC (The Alpha Matrix)
+        // ====================================================================
+        let finalScore: number;
+        let mode: string;
+
+        if (performanceStatus === 'PROVEN') {
+            // TRUST THE WHALE - Performance is king
+            // Weight: 60% Performance + 25% Insider + 15% Volume
+            finalScore = (performanceScore * 0.60) + (insiderScore * 0.25) + (volumeScore * 0.15);
+            mode = 'PROVEN';
+        } 
+        else if (isFreshWallet) {
+            // FRESH WALLET - Trust Funding + Volume
+            // Weight: 50% Insider + 50% Volume
+            finalScore = (insiderScore * 0.50) + (volumeScore * 0.50);
+            mode = 'FRESH';
+        }
+        else {
+            // UNKNOWN - Balanced approach
+            // Weight: 30% Performance + 35% Insider + 35% Volume
+            finalScore = (performanceScore * 0.30) + (insiderScore * 0.35) + (volumeScore * 0.35);
+            mode = 'UNKNOWN';
         }
 
-        // 4. Winrate Modifier
-        if (whale.winrate > 0.60) {
-            score += 20;
-            debugLog.winrateBonus = 20;
-        }
+        // Clamp to 0-100
+        finalScore = Math.max(0, Math.min(100, Math.round(finalScore)));
 
-        // 5. New Market Bonus
-        if (trade.isNewMarket) {
-            score += 15;
-            debugLog.newMarketBonus = 15;
-        }
-
-        // Clamp 0-100
-        const finalScore = Math.max(0, Math.min(100, score));
-
-        // [SIDE EFFECT] Whale Tagging
+        // ====================================================================
+        // SIDE EFFECT: TAG HIGH SCORERS
+        // ====================================================================
         if (finalScore >= 85 && whaleAddress) {
             try {
-                const currentTags = await prisma.whale.findUnique({
+                const current = await prisma.whale.findUnique({
                     where: { address: whaleAddress },
                     select: { tags: true }
                 });
 
-                let newTags = currentTags?.tags || '';
-                if (!newTags.includes('POSSIBLE_INSIDER')) {
-                    newTags = newTags ? `${newTags},POSSIBLE_INSIDER` : 'POSSIBLE_INSIDER';
-
+                let tags = current?.tags || '';
+                if (!tags.includes('POSSIBLE_INSIDER')) {
+                    tags = tags ? `${tags},POSSIBLE_INSIDER` : 'POSSIBLE_INSIDER';
                     await prisma.whale.update({
                         where: { address: whaleAddress },
-                        data: { tags: newTags }
+                        data: { tags }
                     });
-                    debugLog.tagUpdate = "POSSIBLE_INSIDER";
                 }
             } catch (e) {
-                console.warn('⚠️ Failed to tag insider:', e);
+                // Silent fail - tagging is non-critical
             }
         }
 
-        // Build log string
-        const breakdown = Object.entries(debugLog)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join(' + ');
-
-        logger.info(`🎯 [Score] ${finalScore} | ${breakdown}`);
+        // Log with breakdown
+        const statsInfo = realStats?.isReliable 
+            ? `WR=${realStats.winrate.toFixed(0)}% PnL=$${realStats.realizedPnL.toFixed(0)}` 
+            : 'NO_STATS';
+        const icon = finalScore >= 90 ? '🔥' : finalScore >= 70 ? '✅' : finalScore >= 50 ? '📊' : '⚪';
+        logger.info(`${icon} [Alpha] ${finalScore} | ${whaleAddress?.substring(0, 10)}... | $${trade.amountUSD.toFixed(0)} | mode=${mode} | ${statsInfo} | ${funding?.tag || 'NO_FUNDING'}`);
 
         return finalScore;
     }
 
     classifyTrade(trade: TradeData): TradePattern {
-        let pattern = TradePattern.NORMAL;
-
         if (trade.side === 'BUY') {
-            if (trade.price > 0.90) pattern = TradePattern.FOMO_CHASE;
-            else if (trade.price < 0.10) pattern = TradePattern.SMART_ENTRY;
-        } else if (trade.side === 'SELL') {
-            if (trade.price < 0.30) pattern = TradePattern.PANIC_SELL;
-            else if (trade.price > 0.70) pattern = TradePattern.WHALE_EXIT;
+            if (trade.price > 0.90) return TradePattern.FOMO_CHASE;
+            if (trade.price < 0.10) return TradePattern.SMART_ENTRY;
+        } else {
+            if (trade.price < 0.30) return TradePattern.PANIC_SELL;
+            if (trade.price > 0.70) return TradePattern.WHALE_EXIT;
         }
-
-        logger.debug('AnalysisService.classifyTrade', {
-            trade: { side: trade.side, price: trade.price },
-            pattern
-        });
-
-        return pattern;
+        return TradePattern.NORMAL;
     }
 }

@@ -13,6 +13,20 @@ export const getStyle = () => {
     return style
 }
 
+// Default API URL - can be overridden via extension settings
+// IMPORTANT: Update this when deploying to production domain
+const DEFAULT_API_BASE = process.env.PLASMO_PUBLIC_API_URL || "https://api.whalescope.io"
+
+// Get API URL from storage
+async function getApiBase(): Promise<string> {
+    try {
+        const result = await chrome.storage.sync.get(['settings'])
+        return result.settings?.apiUrl || DEFAULT_API_BASE
+    } catch {
+        return DEFAULT_API_BASE
+    }
+}
+
 interface SentimentData {
     market: string;
     bullishVolume: number;
@@ -63,8 +77,8 @@ const WhaleOverlay = () => {
         setLoading(true);
 
         try {
-            // [VPS CONFIGURATION]
-            const res = await fetch(`https://whalescope.87.120.186.161.sslip.io/api/markets/${marketSlug}/sentiment`);
+            const apiBase = await getApiBase();
+            const res = await fetch(`${apiBase}/api/markets/${marketSlug}/sentiment`);
             if (res.ok) {
                 const json = await res.json();
 

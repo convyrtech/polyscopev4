@@ -1,17 +1,18 @@
 import WebSocket from 'ws';
-import axios from 'axios';
-import { PrismaClient } from '@whalescope/db';
+import axios, { AxiosError } from 'axios';
+import { prisma } from '@whalescope/db';
 import { AnalysisService, TradeData } from './services/analysis.service';
 import { StrategyService, StrategyType, SignalCandidate } from './services/strategy.service';
 import { RiskService } from './services/risk.service';
 import { PaperTradingService } from './services/paper-trading.service';
 import { SyndicateService } from './services/syndicate.service';
+import { withRetry } from './lib/retry';
+import { DataApiTradeSchema, DataApiTrade, GammaMarket, GammaMarketToken, parseApiResponse } from './lib/schemas';
+import { INGESTOR_CONFIG } from './lib/config';
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
 const TRADE_API_URL = 'https://data-api.polymarket.com/trades';
-
-const prisma = new PrismaClient();
 
 // Cache to store slug/question for incoming asset IDs
 interface MarketCache {
@@ -19,9 +20,8 @@ interface MarketCache {
     question: string;
     conditionId: string;
     description?: string;
-    tokens?: any[]; // raw tokens data
-    outcome?: string; // "Yes", "No", etc.
-    // [NEW] Venezuela Protocol Metadata
+    tokens?: GammaMarketToken[];
+    outcome?: string;
     expiryDate?: Date;
     volume?: number;
 }
@@ -35,7 +35,12 @@ export class PolymarketIngestor {
     private isConnected = false;
     private marketCache: Map<string, MarketCache> = new Map(); // asset_id -> Info
     private processedTradeIds: Set<string> = new Set(); // Dedup for HTTP
+    private readonly MAX_PROCESSED_IDS = 100000; // Prevent unbounded growth
+    private readonly MAX_EVENT_MAP_SIZE = 1000; // Prevent eventMap unbounded growth
     private currentAssetIndex = 0; // [NEW] For Round Robin
+    private pingInterval: NodeJS.Timeout | null = null; // Prevent interval leaks
+    private discoveryInterval: NodeJS.Timeout | null = null; // Auto-discovery interval
+    private isShuttingDown = false; // Graceful shutdown flag
 
     // --- SERVICES ---
     private analysisService = new AnalysisService();
@@ -90,8 +95,6 @@ export class PolymarketIngestor {
                 const events = Array.isArray(message) ? message : [message];
                 for (const e of events) {
                     if (e.event_type === 'last_trade_price' || e.event_type === 'trade') {
-                        // Just log activity to show "Life"
-                        // console.log(`⚡ [Pulse] ${e.side} ${e.size} shares on ${e.asset_id}`); 
                     }
                 }
             } catch (error) {
@@ -100,7 +103,6 @@ export class PolymarketIngestor {
         });
 
         this.ws.on('close', () => {
-            // console.log('❌ [Stream A] WS Closed. Reconnecting...');
             setTimeout(() => this.connectWs(), 5000);
         });
 
@@ -108,7 +110,11 @@ export class PolymarketIngestor {
     }
 
     private startPing() {
-        setInterval(() => {
+        // Clear previous interval to prevent memory leak on reconnect
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+        }
+        this.pingInterval = setInterval(() => {
             if (this.ws?.readyState === WebSocket.OPEN) {
                 this.ws.send(JSON.stringify({ type: 'ping' }));
             }
@@ -166,15 +172,26 @@ export class PolymarketIngestor {
 
     private async fetchTradesForAsset(assetId: string) {
         try {
-            const response = await axios.get(TRADE_API_URL, {
-                params: { asset_id: assetId, limit: 10, sort: 'timestamp' } // Small limit for frequent polling
-            });
+            const response = await withRetry(
+                () => axios.get(TRADE_API_URL, {
+                    params: { asset_id: assetId, limit: 10, sort: 'timestamp' }
+                }),
+                `fetchTrades:${assetId.substring(0, 8)}`,
+                { maxRetries: 2, baseDelayMs: 500 }
+            );
 
-            const trades = response.data;
-            if (!Array.isArray(trades)) return;
+            const rawTrades = response.data;
+            if (!Array.isArray(rawTrades)) return;
+
+            // Validate and filter trades using Zod schema
+            const validTrades: DataApiTrade[] = [];
+            for (const raw of rawTrades) {
+                const parsed = parseApiResponse(DataApiTradeSchema, raw, `trade:${assetId.substring(0, 8)}`);
+                if (parsed) validTrades.push(parsed);
+            }
 
             // Process Oldest -> Newest
-            const sortedTrades = trades.reverse();
+            const sortedTrades = validTrades.reverse();
 
             for (const trade of sortedTrades) {
                 try {
@@ -198,9 +215,13 @@ export class PolymarketIngestor {
         const runDiscovery = async () => {
             console.log('🔭 [Auto-Discovery] Scanning Top 50 Active Markets...');
             try {
-                const response = await axios.get(GAMMA_URL, {
-                    params: { active: true, closed: false, limit: 50, sort: 'volume', ascending: false }
-                });
+                const response = await withRetry(
+                    () => axios.get(GAMMA_URL, {
+                        params: { active: true, closed: false, limit: 50, sort: 'volume', ascending: false }
+                    }),
+                    'autoDiscovery',
+                    { maxRetries: 2 }
+                );
 
                 const markets = response.data;
                 if (!Array.isArray(markets)) return;
@@ -230,24 +251,40 @@ export class PolymarketIngestor {
         // Run immediately
         await runDiscovery();
 
-        // Schedule every 10 minutes
-        setInterval(runDiscovery, 10 * 60 * 1000);
+        // Schedule every 10 minutes and save reference for cleanup
+        this.discoveryInterval = setInterval(runDiscovery, 10 * 60 * 1000);
     }
 
-    private async processDetectiveTrade(trade: any) {
+    private async processDetectiveTrade(trade: DataApiTrade) {
 
         const uniqueId = trade.id || trade.transactionHash || trade.match_id;
         if (!uniqueId || this.processedTradeIds.has(uniqueId)) return;
 
         // Filter: Must be worth analyzing
-        const price = Number(trade.price);
-        const size = Number(trade.size);
+        const price = trade.price; // Already a number from Zod transform
+        const size = trade.size;   // Already a number from Zod transform
         const volumeUSD = price * size;
 
-        if (volumeUSD < 0) return; // Filter noise
+        if (volumeUSD <= 0) return; // Filter noise (fixed: was < 0, should be <= 0)
+
+        // ====================================================================
+        // EARLY EXIT: Skip small trades to save API calls
+        // We only do expensive analysis for trades >= MIN_TRADE_AMOUNT_USD
+        // But we still record larger trades for whale discovery
+        // ====================================================================
+        const minForAnalysis = INGESTOR_CONFIG.MIN_TRADE_AMOUNT_USD; // 500
+        const minForRecord = INGESTOR_CONFIG.MIN_SIGNAL_TRADE_AMOUNT; // 100
+        
+        if (volumeUSD < minForRecord) {
+            return; // Skip entirely - too small to care
+        }
 
         // Resolve Metadata
-        const assetId = trade.asset_id || trade.asset; // Handle both
+        const assetId = trade.asset_id || trade.asset;
+        if (!assetId) {
+            console.warn(`⚠️ [Stream B] No asset_id for trade ${uniqueId}`);
+            return;
+        }
         let metadata = this.marketCache.get(assetId);
 
         // [FIX] Trade API already returns slug, outcome, title, conditionId!
@@ -259,6 +296,15 @@ export class PolymarketIngestor {
 
         // If we got data from trade, cache it for future use
         if (trade.slug && !metadata) {
+            // [MEMORY PROTECTION] Check cache size before adding
+            if (this.marketCache.size >= INGESTOR_CONFIG.MAX_MARKET_CACHE_SIZE) {
+                // Remove oldest 20% of entries
+                const entries = Array.from(this.marketCache.keys());
+                const toDelete = entries.slice(0, Math.floor(entries.length * 0.2));
+                toDelete.forEach(key => this.marketCache.delete(key));
+                console.log(`🧹 [Ingestor] Pruned ${toDelete.length} old market cache entries (${this.marketCache.size} remaining)`);
+            }
+            
             this.marketCache.set(assetId, {
                 slug: trade.slug,
                 question: trade.title || '',
@@ -287,13 +333,13 @@ export class PolymarketIngestor {
         // Mark as seen (We process EVERYTHING now)
         this.processedTradeIds.add(uniqueId);
 
-        // [MEMORY PROTECTION] Garbage Collection
-        if (this.processedTradeIds.size > 50000) {
-            this.processedTradeIds.clear();
-            this.processedTradeIds.add(uniqueId);
+        // [MEMORY PROTECTION] Prune old IDs when limit reached
+        if (this.processedTradeIds.size > this.MAX_PROCESSED_IDS) {
+            // Remove oldest 20% of entries
+            const toDelete = Array.from(this.processedTradeIds).slice(0, Math.floor(this.MAX_PROCESSED_IDS * 0.2));
+            toDelete.forEach(id => this.processedTradeIds.delete(id));
+            console.log(`🧹 [Ingestor] Pruned ${toDelete.length} old trade IDs (${this.processedTradeIds.size} remaining)`);
         }
-
-        // console.log(`🕵️ [Debug] Valid Trade: ${volumeUSD.toFixed(1)} on ${marketSlug}`);
 
         // 1. Identify Actor (Taker / Aggressor)
         // API returns "owner" or "proxyWallet" which is the Taker.
@@ -372,12 +418,21 @@ export class PolymarketIngestor {
                 this.syndicateService.recordTrade(marketSlug, actorAddress, outcome);
             }
 
-            // 2. AI Analysis
+            // ================================================================
+            // OPTIMIZATION: Skip expensive AI analysis for small trades
+            // We still recorded the whale & syndicate above, but don't call APIs
+            // ================================================================
+            if (volumeUSD < minForAnalysis) {
+                // Small trade - just record for whale tracking, no signal
+                return;
+            }
+
+            // 2. AI Analysis (only for trades >= $500)
             const tradeData: TradeData = {
                 amountUSD: volumeUSD,
                 isNewMarket: false,
                 price: price,
-                side: trade.side || 'BUY',
+                side: (trade.side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
                 marketSlug: marketSlug,  // For kill switch filtering
                 outcome: outcome         // For syndicate detection
             };
@@ -420,16 +475,34 @@ export class PolymarketIngestor {
 
             if (strategyResult.action === 'BET') {
                 betName = strategyResult.strategy;
-                // Calculate Risk
-                // Need win probability. Usage of aiScore / 100? Or implied prob from price?
-                // "Quarter Kelly": we need estimated win probability.
-                // If we use `aiScore`, let's assume aiScore (0-100) -> 0.0 to 1.0 prob?
-                // Or use price as implied prob (no edge)?
-                // The prompt doesn't specify where `winProb` comes from for Kelly.
-                // "Step 3 ... Return { strategy ... action ... confidence }".
-                // Let's use `strategyResult.confidence` as the Win Probability?
-                // Use confidence as win probability proxy
-                const winProb = strategyResult.confidence || (aiScore / 100);
+                
+                // ================================================================
+                // KELLY WIN PROBABILITY CALCULATION (Fixed!)
+                // ================================================================
+                // Market price = implied probability (60c = 60% chance)
+                // AI Score = our confidence the whale is right (0-100)
+                // 
+                // If whale bets on outcome at price 0.40 (40% market odds):
+                // - If we believe whale is right (aiScore=90), we think real prob > 40%
+                // - Edge = (ourProb - marketProb) 
+                // 
+                // Simple approach: Blend market price with AI confidence boost
+                // winProb = marketPrice + (1 - marketPrice) * (aiScore/100) * edgeFactor
+                // 
+                // More conservative: Use market price as base, boost by aiScore
+                const marketImpliedProb = price; // 0.0 - 1.0
+                const aiConfidence = aiScore / 100; // 0.0 - 1.0
+                
+                // Our estimated probability: market says X%, we think whale adds edge
+                // If aiScore is 100, we believe there's a 20% edge over market
+                // If aiScore is 50, minimal edge (5%)
+                const maxEdge = 0.20; // Maximum 20% edge we believe exists
+                const edgeBoost = aiConfidence * maxEdge;
+                
+                // winProb = min(0.95, marketProb + edge)
+                const winProb = Math.min(0.95, marketImpliedProb + edgeBoost);
+                
+                // Odds for Kelly: If market price is 0.40, payout on win = 1/0.40 = 2.5x
                 const odds = price > 0 ? (1 / price) : 0;
 
                 betSize = this.riskService.calculateBetSize(
@@ -439,12 +512,13 @@ export class PolymarketIngestor {
                     marketSlug
                 );
 
-                console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (Conf: ${winProb.toFixed(2)})`);
+                console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (MarketProb: ${(marketImpliedProb*100).toFixed(0)}% + Edge: ${(edgeBoost*100).toFixed(0)}% = WinProb: ${(winProb*100).toFixed(0)}%)`);
             }
 
-            // [FIX] Attach resolved metadata to trade object for PaperTradingService
-            trade.marketSlug = marketSlug;
-            trade.outcome = outcome;
+            // Note: We do NOT mutate the trade object. Instead, we pass resolved metadata to PaperTradingService via onSignal.
+            
+            // Ensure conditionId is defined for signal creation
+            const finalConditionId = conditionId || assetId;
 
             let signal;
             try {
@@ -453,9 +527,9 @@ export class PolymarketIngestor {
                         txHash: uniqueId,
                         timestamp: new Date(Number(trade.timestamp) * 1000),
                         marketSlug: marketSlug,
-                        conditionId: conditionId,
+                        conditionId: finalConditionId,
                         outcome: outcome,
-                        side: trade.side.toUpperCase(),
+                        side: (trade.side || 'BUY').toUpperCase(),
                         price: price,
                         amountUSD: volumeUSD,
                         whaleAddress: actorAddress || '0x000',
@@ -497,9 +571,13 @@ export class PolymarketIngestor {
     private async refreshMarketCache() {
         try {
             console.log('🔄 [Ingestor] Refreshing Gamma Cache...');
-            const response = await axios.get(GAMMA_URL, {
-                params: { active: true, closed: false, limit: 50, sort: 'volume', ascending: false }
-            });
+            const response = await withRetry(
+                () => axios.get(GAMMA_URL, {
+                    params: { active: true, closed: false, limit: 50, sort: 'volume', ascending: false }
+                }),
+                'refreshMarketCache',
+                { maxRetries: 2 }
+            );
 
             const markets = response.data;
             if (!Array.isArray(markets)) return;
@@ -641,9 +719,13 @@ export class PolymarketIngestor {
             let isEvent = false;
 
             try {
-                const eventRes = await axios.get(`https://gamma-api.polymarket.com/events`, {
-                    params: { slug: slug }
-                });
+                const eventRes = await withRetry(
+                    () => axios.get(`https://gamma-api.polymarket.com/events`, {
+                        params: { slug: slug }
+                    }),
+                    `trackEvent:${slug}`,
+                    { maxRetries: 2 }
+                );
 
                 if (Array.isArray(eventRes.data) && eventRes.data.length > 0) {
                     const event = eventRes.data[0];
@@ -659,9 +741,13 @@ export class PolymarketIngestor {
 
             // If no markets found via event, try direct market query
             if (marketsToTrack.length === 0) {
-                const marketRes = await axios.get(GAMMA_URL, {
-                    params: { slug: slug } // specific market slug
-                });
+                const marketRes = await withRetry(
+                    () => axios.get(GAMMA_URL, {
+                        params: { slug: slug }
+                    }),
+                    `trackMarket:${slug}`,
+                    { maxRetries: 2 }
+                );
                 if (Array.isArray(marketRes.data)) {
                     marketsToTrack = marketRes.data;
                 } else if (marketRes.data) { // ID lookup?
@@ -699,6 +785,13 @@ export class PolymarketIngestor {
                 const combined = Array.from(new Set([...existing, ...discoveredMarketSlugs]));
                 this.eventMap.set(slug, combined);
                 console.log(`🗺️ [Ingestor] Mapped '${slug}' (${isEvent ? 'Event' : 'Market'}) to ${combined.length} markets:`, combined);
+                
+                // [MEMORY PROTECTION] Prune eventMap if too large
+                if (this.eventMap.size > this.MAX_EVENT_MAP_SIZE) {
+                    const toDelete = Array.from(this.eventMap.keys()).slice(0, Math.floor(this.MAX_EVENT_MAP_SIZE * 0.2));
+                    toDelete.forEach(key => this.eventMap.delete(key));
+                    console.log(`🧹 [Ingestor] Pruned ${toDelete.length} old event mappings (${this.eventMap.size} remaining)`);
+                }
             }
 
             // [NEW] Historical Backfill
@@ -716,12 +809,13 @@ export class PolymarketIngestor {
 
                 for (const assetId of assetsToBackfill) {
                     try {
-                        const historyRes = await axios.get(TRADE_API_URL, {
-                            params: { asset_id: assetId, limit: 100, sort: 'timestamp' } // descending usually? Need oldest first? 
-                            // API default is likely newest first if not specified, but let's check docs. 
-                            // Usually we want 'timestamp' asc? 
-                            // Actually, simpler: fetch default (newest), then reverse array.
-                        });
+                        const historyRes = await withRetry(
+                            () => axios.get(TRADE_API_URL, {
+                                params: { asset_id: assetId, limit: 100, sort: 'timestamp' }
+                            }),
+                            `backfill:${assetId.substring(0, 8)}`,
+                            { maxRetries: 2, baseDelayMs: 500 }
+                        );
 
                         const trades = historyRes.data;
                         if (Array.isArray(trades)) {
@@ -833,5 +927,65 @@ export class PolymarketIngestor {
             console.error(`❌ [Ingestor] Lazy Load Failed for ${assetId}:`, e.message);
             return undefined;
         }
+    }
+
+    // =========================================================================
+    // 🛑 GRACEFUL SHUTDOWN
+    // =========================================================================
+    
+    /**
+     * Gracefully stop all ingestor services
+     * Call this on SIGTERM/SIGINT to prevent resource leaks
+     */
+    public async stop(): Promise<void> {
+        if (this.isShuttingDown) {
+            console.log('⚠️ [Ingestor] Already shutting down...');
+            return;
+        }
+        
+        this.isShuttingDown = true;
+        console.log('🛑 [Ingestor] Graceful shutdown initiated...');
+
+        // 1. Stop WebSocket
+        if (this.ws) {
+            this.ws.removeAllListeners();
+            this.ws.terminate();
+            this.ws = null;
+            console.log('✅ [Shutdown] WebSocket closed');
+        }
+
+        // 2. Clear all intervals
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+            console.log('✅ [Shutdown] Ping interval cleared');
+        }
+
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+            console.log('✅ [Shutdown] Polling interval cleared');
+        }
+
+        if (this.discoveryInterval) {
+            clearInterval(this.discoveryInterval);
+            this.discoveryInterval = null;
+            console.log('✅ [Shutdown] Discovery interval cleared');
+        }
+
+        // 3. Clear caches to free memory
+        this.marketCache.clear();
+        this.processedTradeIds.clear();
+        this.eventMap.clear();
+
+        this.isConnected = false;
+        console.log('✅ [Ingestor] Graceful shutdown complete');
+    }
+
+    /**
+     * Check if ingestor is shutting down (for loop guards)
+     */
+    public isShuttingDownStatus(): boolean {
+        return this.isShuttingDown;
     }
 }

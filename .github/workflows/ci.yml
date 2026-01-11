@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: whalescope
+          POSTGRES_PASSWORD: whalescope
+          POSTGRES_DB: whalescope
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: cd packages/db && npx prisma generate
+
+      - name: Run database migrations
+        run: cd packages/db && npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://whalescope:whalescope@localhost:5432/whalescope
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm --filter=api vitest run src/tests/
+        env:
+          DATABASE_URL: postgresql://whalescope:whalescope@localhost:5432/whalescope
+          NODE_ENV: test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check API
+        run: pnpm --filter=api build
+
+      - name: Type check Web
+        run: pnpm --filter=web build

@@ -31,10 +31,6 @@ interface AnalyticsCardProps {
 export function AnalyticsCard({ title, subtitle, children }: AnalyticsCardProps) {
     return (
         <div className="border border-zinc-800 bg-zinc-900/20 p-6 relative overflow-hidden">
-            {/* Corner accent */}
-            <div className="absolute top-0 left-0 w-16 h-[2px] bg-emerald-500/50" />
-            <div className="absolute top-0 left-0 w-[2px] h-16 bg-emerald-500/50" />
-
             <h3 className="text-xs uppercase tracking-[0.2em] text-zinc-500 font-bold mb-1">{title}</h3>
             {subtitle && <p className="text-zinc-600 text-xs mb-4 font-mono">{subtitle}</p>}
             <div className="relative z-10">{children}</div>

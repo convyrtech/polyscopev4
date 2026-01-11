@@ -1,6 +1,11 @@
 {
     "extends": "@whalescope/tsconfig/base.json",
-    "include": [
-        "**/*.ts"
-    ]
+    "compilerOptions": {
+        "outDir": "./dist",
+        "declaration": true,
+        "declarationMap": true,
+        "types": ["node"]
+    },
+    "include": ["index.ts"],
+    "exclude": ["dist"]
 }

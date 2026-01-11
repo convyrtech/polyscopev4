@@ -14,6 +14,17 @@ async function main() {
     const deletedPos = await prisma.paperPosition.deleteMany({});
     console.log(`   Deleted ${deletedPos.count} positions.`);
 
+    // 1.5 [NEW] Reset ALL strategy balances to initial
+    console.log('💰 Resetting ALL strategy balances...');
+    const allStrategies = await prisma.strategy.findMany();
+    for (const strat of allStrategies) {
+        await prisma.strategy.update({
+            where: { id: strat.id },
+            data: { currentBalance: strat.initialBudget }
+        });
+        console.log(`   💰 ${strat.name}: $${strat.initialBudget.toFixed(2)}`);
+    }
+
     // 2. Mark Signals as PROCESSED (Prevent Re-entry)
     // Actually, if we delete positions, the signals might be picked up again if Ingestor restarts and re-processes?
     // Ingestor handles deduplication via `txHash` P2002 check.
@@ -65,6 +76,7 @@ async function main() {
             name: "Contrarian Fade",
             description: "Bets against retail FOMO on high prices",
             config: {
+                minScore: 50,    // [FIX] Added minScore to prevent Score 0 trades
                 maxPrice: 0.40, // Only buy cheap calls
                 minVol: 5000,
                 takeProfit: 2.0, // +200%
@@ -83,7 +95,9 @@ async function main() {
             where: { id: stableId },
             update: {
                 status: 'ACTIVE',
-                config: s.config as any
+                config: s.config as any,
+                currentBalance: 10000,  // [FIX] Reset balance on update too
+                initialBudget: 10000
             },
             create: {
                 id: stableId, // Explicit ID

@@ -1,6 +1,4 @@
-import { PrismaClient } from '@whalescope/db';
-
-const prisma = new PrismaClient();
+import { prisma } from '@whalescope/db';
 
 export class PaperTradingService {
     private static instance: PaperTradingService;
@@ -21,12 +19,16 @@ export class PaperTradingService {
     // 1. SIGNAL ENTRY (With Latency & Slippage)
     // =========================================================================
     public async onSignal(signal: any) {
+        // [FIX] Hard guard: Reject Score 0 or undefined signals immediately
+        if (!signal.aiScore || signal.aiScore === 0) {
+            console.log(`🚫 [Paper] Rejected Signal: Score is ${signal.aiScore} (zero or undefined) | ${signal.marketSlug}`);
+            return;
+        }
+
         // Fetch Active Strategies
         const strategies = await prisma.strategy.findMany({
             where: { status: 'ACTIVE' }
         });
-
-        if (strategies.length === 0) return;
 
         if (strategies.length === 0) return;
 
@@ -58,7 +60,6 @@ export class PaperTradingService {
                 // 1. Min Score Filter
                 const minScore = config.minScore !== undefined ? Number(config.minScore) : 0;
                 if (signal.aiScore < minScore) {
-                    // console.log(`Skipping ${strategy.name}: Score ${signal.aiScore} < ${minScore}`);
                     continue;
                 }
 
@@ -66,7 +67,6 @@ export class PaperTradingService {
                 if (config.maxPrice !== undefined) {
                     const maxPrice = Number(config.maxPrice);
                     if (signal.price > maxPrice) {
-                        // console.log(`Skipping ${strategy.name}: Price ${signal.price} > ${maxPrice}`);
                         continue;
                     }
                 }
@@ -81,6 +81,21 @@ export class PaperTradingService {
 
                 // Position Size
                 const betSize = config.betSize || 100; // Default $100
+
+                // ================== DUPLICATE POSITION CHECK ==================
+                // [FIX] Prevent "Machine Gun" bug: Only ONE open position per strategy+market
+                const existingPosition = await prisma.paperPosition.findFirst({
+                    where: {
+                        strategyId: strategy.id,
+                        marketSlug: signal.marketSlug,
+                        status: 'OPEN'
+                    }
+                });
+                if (existingPosition) {
+                    console.log(`⏭️ [Paper] Skipping ${strategy.name}: Already OPEN on ${signal.marketSlug}`);
+                    continue;
+                }
+                // ==============================================================
 
                 // ================== BANKROLL MANAGEMENT ==================
                 // Pre-trade check: Insufficient funds

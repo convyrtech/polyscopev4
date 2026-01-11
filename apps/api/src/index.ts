@@ -3,22 +3,76 @@ import { Hono } from 'hono'
 import { WebSocketServer } from 'ws'
 import { PolymarketIngestor } from './ingestor'
 import { config } from 'dotenv'
-import { PrismaClient } from '@whalescope/db'
+import { prisma } from '@whalescope/db'
 import { cors } from 'hono/cors'
+import { fundingService } from './services/funding.service'
 
 config(); // Load env
 
+// ============================================================================
+// ENVIRONMENT VALIDATION - Fail fast if required vars are missing
+// ============================================================================
+const REQUIRED_ENV_VARS = ['DATABASE_URL'] as const;
+const OPTIONAL_ENV_VARS = ['ALCHEMY_API_KEY', 'PORT'] as const;
+
+for (const envVar of REQUIRED_ENV_VARS) {
+  if (!process.env[envVar]) {
+    console.error(`❌ FATAL: Required environment variable ${envVar} is not set`);
+    process.exit(1);
+  }
+}
+
+for (const envVar of OPTIONAL_ENV_VARS) {
+  if (!process.env[envVar]) {
+    console.warn(`⚠️  Optional environment variable ${envVar} is not set`);
+  }
+}
+
 const app = new Hono()
-const prisma = new PrismaClient()
+
+// ============================================================================
+// RATE LIMITING - Prevent abuse (in-memory, simple)
+// ============================================================================
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests per minute per IP
+
+app.use('/*', async (c, next) => {
+  const clientIP = c.req.header('x-forwarded-for')?.split(',')[0] || 'unknown';
+  const now = Date.now();
+  
+  let entry = rateLimitMap.get(clientIP);
+  if (!entry || now > entry.resetTime) {
+    entry = { count: 0, resetTime: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(clientIP, entry);
+  }
+  
+  entry.count++;
+  
+  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+    return c.json({ error: 'Rate limit exceeded', code: 'RATE_LIMITED' }, 429);
+  }
+  
+  await next();
+});
+
+// Cleanup stale rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now > entry.resetTime) rateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000);
 
 app.use('/*', cors({
   origin: (origin) => {
-    // Allow Polymarket and our HTTPS API domain
+    // Allow Polymarket and our API domains
     const allowedOrigins = [
       'https://polymarket.com',
       'https://www.polymarket.com',
-      'https://whalescope.87.120.186.161.sslip.io'
-    ];
+      'https://api.whalescope.io',
+      process.env.API_ORIGIN // Allow custom origin from env
+    ].filter(Boolean);
     // Allow if origin is in allowedOrigins, or reflect for extensions
     if (!origin || allowedOrigins.includes(origin)) return origin || '*';
     return origin; // Reflect for Chrome extension localhost
@@ -64,12 +118,55 @@ app.get('/', (c) => {
 })
 
 // Health check endpoint for load balancers
-app.get('/health', (c) => {
-  return c.json({ status: 'ok', timestamp: new Date().toISOString() })
+app.get('/health', async (c) => {
+  const checks = {
+    api: 'ok',
+    database: 'unknown',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    memory: {
+      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+    },
+  };
+
+  try {
+    // Check database connectivity
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'ok';
+  } catch (error) {
+    checks.database = 'error';
+  }
+
+  const isHealthy = checks.api === 'ok' && checks.database === 'ok';
+  
+  return c.json({
+    status: isHealthy ? 'healthy' : 'degraded',
+    checks,
+  }, isHealthy ? 200 : 503);
 })
 
+// Input validation regex for slugs (alphanumeric, dashes, underscores)
+const SLUG_REGEX = /^[a-zA-Z0-9_-]{1,200}$/;
+const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+
+function validateSlug(slug: string | undefined): string | null {
+  if (!slug || !SLUG_REGEX.test(slug)) return null;
+  return slug;
+}
+
+function validateAddress(address: string | undefined): string | null {
+  if (!address || !ADDRESS_REGEX.test(address)) return null;
+  return address.toLowerCase();
+}
+
 app.get('/api/markets/:slug/sentiment', async (c) => {
-  const slug = c.req.param('slug');
+  const rawSlug = c.req.param('slug');
+  const slug = validateSlug(rawSlug);
+  
+  if (!slug) {
+    return c.json({ error: 'Invalid slug format', code: 'INVALID_SLUG' }, 400);
+  }
 
   try {
     // 1. Resolve Target Slugs (Event -> [Market1, Market2])
@@ -105,19 +202,32 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
       select: { amountUSD: true, side: true, outcome: true, whaleAddress: true }
     });
 
-    const result = {
+    const result: {
+      market: string;
+      bullishVolume: number;
+      bearishVolume: number;
+      neutralVolume: number;
+      whaleCount: number;
+      activeWhales: { address: string; alias: string; volume: number; winrate: number }[];
+      latestAiScore: number;
+      latestPattern: string;
+      latestSide: string;
+      latestOutcome: string;
+      lastTradeTime: string | null;
+      history: { time: string; score: number; side: string }[];
+    } = {
       market: slug,
       bullishVolume: 0,
       bearishVolume: 0,
       neutralVolume: 0,
       whaleCount: 0,
-      activeWhales: [] as any[],
+      activeWhales: [],
       latestAiScore: 0,
       latestPattern: "",
       latestSide: "N/A",
       latestOutcome: "N/A",
-      lastTradeTime: null as any,
-      history: [] as any[]
+      lastTradeTime: null,
+      history: []
     };
 
     const whalesSet = new Set<string>();
@@ -161,10 +271,10 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     });
 
     // Sort ASC for Chart
-    const history = historySignals.reverse().map((h: any) => ({
+    const history = historySignals.reverse().map((h) => ({
       time: h.timestamp.toISOString(),
-      score: h.aiScore,
-      price: h.price
+      score: h.aiScore || 0,
+      side: h.side
     }));
 
     // [NEW] Top 5 Active Whales (The Roster)
@@ -177,7 +287,7 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
     });
 
     // Fetch aliases for these whales
-    const activeWhales = await Promise.all(topWhalesGroup.map(async (w: any) => {
+    const activeWhales = await Promise.all(topWhalesGroup.map(async (w) => {
       const whaleInfo = await prisma.whale.findUnique({
         where: { address: w.whaleAddress },
         select: { alias: true, winrate: true }
@@ -190,8 +300,8 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
       };
     }));
 
-    result.latestAiScore = (latestSignal as any)?.aiScore || 0;
-    result.latestPattern = (latestSignal as any)?.tags || '';
+    result.latestAiScore = latestSignal?.aiScore || 0;
+    result.latestPattern = latestSignal?.tags || '';
     result.latestSide = latestSignal?.side || "N/A";
     result.latestOutcome = latestSignal?.outcome || "N/A";
     result.lastTradeTime = latestSignal?.timestamp ? latestSignal.timestamp.toISOString() : null;
@@ -211,11 +321,10 @@ app.get('/api/markets/:slug/sentiment', async (c) => {
       activeWhales: result.activeWhales
     });
   } catch (e: any) {
-    console.error("API Error detailed:", e);
+    console.error("API Error detailed:", e); // Full error logged server-side only
     return c.json({
       error: "Failed to fetch sentiment",
-      details: e.message,
-      stack: e.stack
+      code: "SENTIMENT_ERROR"
     }, 500);
   }
 });
@@ -258,13 +367,20 @@ app.get('/api/signals/feed', async (c) => {
         id: true,
         timestamp: true,
         marketSlug: true,
+        outcome: true,       // [NEW] Full outcome text
         side: true,
         amountUSD: true,
         aiScore: true,
         tags: true,
-        whaleAddress: true, // Shows "0xSHADOW...LEVIATHAN"
+        whaleAddress: true,
         whale: {
-          select: { alias: true } // "Anonymous Leviathan"
+          select: { 
+            alias: true,
+            tags: true,           // [NEW] Whale tags for rank icons
+            winrate: true,        // [NEW] For fresh wallet detection
+            pnl: true,            // [NEW] For rank context
+            fundingSourceTag: true // [NEW] Source of funds tag
+          }
         }
       }
     });
@@ -272,6 +388,169 @@ app.get('/api/signals/feed', async (c) => {
   } catch (e) {
     console.error("API Error:", e);
     return c.json({ error: "Failed to fetch signals" }, 500);
+  }
+});
+
+// ============================================================================
+// [NEW] Whale Dossier Lookup - GET /api/whales/:address
+// ============================================================================
+app.get('/api/whales/:address', async (c) => {
+  const rawAddress = c.req.param('address');
+  const address = validateAddress(rawAddress);
+
+  if (!address) {
+    return c.json({ error: 'Invalid Ethereum address format', code: 'INVALID_ADDRESS' }, 400);
+  }
+
+  try {
+    // 1. Look up whale in DB with signals for stats calculation
+    let whale = await prisma.whale.findUnique({
+      where: { address },
+      select: {
+        address: true,
+        alias: true,
+        tags: true,
+        winrate: true,
+        pnl: true,
+        volume: true,
+        score: true,
+        lastActive: true,
+        lastAnalyzed: true,
+        fundingSource: true,
+        fundingSourceTag: true,
+        fundingAnalyzedAt: true,
+      }
+    });
+
+    // 2. If whale doesn't exist, create minimal entry
+    if (!whale) {
+      whale = await prisma.whale.create({
+        data: { 
+          address,
+          winrate: 0,
+          pnl: 0,
+          volume: 0,
+          score: 0,
+        },
+        select: {
+          address: true,
+          alias: true,
+          tags: true,
+          winrate: true,
+          pnl: true,
+          volume: true,
+          score: true,
+          lastActive: true,
+          lastAnalyzed: true,
+          fundingSource: true,
+          fundingSourceTag: true,
+          fundingAnalyzedAt: true,
+        }
+      });
+    }
+
+    // 3. Calculate stats from signals
+    const signalStats = await prisma.signal.groupBy({
+      by: ['whaleAddress'],
+      where: { whaleAddress: address },
+      _count: { id: true },
+    });
+    
+    const wonCount = await prisma.signal.count({
+      where: { whaleAddress: address, status: 'WON' }
+    });
+    
+    const lostCount = await prisma.signal.count({
+      where: { whaleAddress: address, status: 'LOST' }
+    });
+    
+    const totalTrades = signalStats[0]?._count?.id || 0;
+    const closedTrades = wonCount + lostCount;
+
+    // 4. Trigger funding analysis if not analyzed yet
+    if (!whale.fundingAnalyzedAt) {
+      try {
+        await fundingService.analyzeFunding(address);
+        
+        // Refresh whale data after analysis
+        whale = await prisma.whale.findUnique({
+          where: { address },
+          select: {
+            address: true,
+            alias: true,
+            tags: true,
+            winrate: true,
+            pnl: true,
+            volume: true,
+            score: true,
+            lastActive: true,
+            lastAnalyzed: true,
+            fundingSource: true,
+            fundingSourceTag: true,
+            fundingAnalyzedAt: true,
+          }
+        });
+      } catch (e) {
+        console.warn(`[Whale API] Funding analysis failed for ${address}:`, e);
+      }
+    }
+
+    // 5. Calculate winrate from actual closed signals
+    const winratePercent = closedTrades > 0 ? ((wonCount / closedTrades) * 100).toFixed(1) : '0.0';
+    
+    // 6. Determine risk level
+    let riskLevel = 'UNKNOWN';
+    if (whale!.fundingSourceTag === 'SUSPICIOUS_INSIDER') {
+      riskLevel = 'HIGH_RISK';
+    } else if (whale!.fundingSourceTag === 'RETAIL') {
+      riskLevel = 'LOW_RISK';
+    } else if (whale!.fundingSourceTag === 'BRIDGE') {
+      riskLevel = 'MEDIUM_RISK';
+    }
+
+    // 7. Build dossier response
+    const dossier = {
+      // Identity
+      address: whale!.address,
+      alias: whale!.alias,
+      
+      // Tags & Classification
+      tags: whale!.tags?.split(',').filter(Boolean) || [],
+      riskLevel,
+      
+      // Funding Intel
+      funding: {
+        source: whale!.fundingSource,
+        tag: whale!.fundingSourceTag || 'UNKNOWN',
+        analyzedAt: whale!.fundingAnalyzedAt,
+        icon: whale!.fundingSourceTag === 'SUSPICIOUS_INSIDER' ? '🌪️' :
+              whale!.fundingSourceTag === 'RETAIL' ? '🏦' :
+              whale!.fundingSourceTag === 'BRIDGE' ? '🌉' :
+              whale!.fundingSourceTag === 'WHALE' ? '💎' : '❓',
+      },
+      
+      // Performance Stats (use stored values from whale analysis, fallback to calculated)
+      stats: {
+        totalTrades,
+        wins: wonCount,
+        losses: lostCount,
+        winrate: whale!.winrate || parseFloat(winratePercent),
+        pnl: whale!.pnl || 0,
+        volume: whale!.volume || 0,
+        score: whale!.score || 0,
+        lastActive: whale!.lastActive,
+      },
+      
+      // Meta
+      _analyzed: !!whale!.fundingAnalyzedAt,
+      _timestamp: new Date().toISOString(),
+    };
+
+    return c.json(dossier);
+
+  } catch (e: any) {
+    console.error("[Whale API] Error:", e);
+    return c.json({ error: e.message || 'Failed to fetch whale data' }, 500);
   }
 });
 
@@ -298,3 +577,34 @@ wss.on('connection', (ws) => {
   console.log('Frontend Client connected')
   ws.send(JSON.stringify({ type: 'WELCOME', message: 'Connected to WhaleScope Stream' }))
 })
+
+// ============================================================================
+// GRACEFUL SHUTDOWN - Clean up resources on process termination
+// ============================================================================
+async function gracefulShutdown(signal: string) {
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+  
+  try {
+    // Stop ingestor (WebSocket, intervals, caches)
+    await ingestor.stop();
+    
+    // Stop FundingService cleanup interval
+    fundingService.destroy();
+    
+    // Close WebSocket server
+    wss.clients.forEach(client => client.terminate());
+    wss.close();
+    
+    // Close database connections
+    await prisma.$disconnect();
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (e) {
+    console.error('❌ Error during shutdown:', e);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

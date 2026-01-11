@@ -1,7 +1,6 @@
-import { PrismaClient } from '@whalescope/db';
+import { prisma } from '@whalescope/db';
 import axios from 'axios';
 
-const prisma = new PrismaClient();
 const DATA_API_URL = 'https://data-api.polymarket.com/trades';
 
 interface TradeHistoryItem {
@@ -75,7 +74,7 @@ export class WhaleService {
         }
 
         // 2. Fetch Data
-        // console.log(`🔍 [WhaleService] Fetching history for ${address.slice(0, 6)}...`);
+        
         const response = await axios.get(DATA_API_URL, {
             params: {
                 maker_address: address,

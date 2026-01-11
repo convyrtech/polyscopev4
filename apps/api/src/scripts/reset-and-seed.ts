@@ -31,6 +31,20 @@ async function main() {
 
     const strategies = [
         {
+            name: 'The Grinder (Micro-Scalp)',
+            initialBudget: 20.00,
+            currentBalance: 20.00,
+            config: {
+                minScore: 20,       // Capture volatility
+                minVol: 100,        // Low volume threshold
+                betSize: 0.50,      // Micro bets - Critical!
+                takeProfit: 0.05,   // 5% quick scalp
+                stopLoss: 0.05,     // Tight stop
+                slippage: 0.015,    // 1.5% penalty for realism
+                description: "$20 Challenge: Micro-scalping with tight risk"
+            }
+        },
+        {
             name: 'Insider Follower',
             config: {
                 takeProfit: 0.50, // +50%
@@ -58,17 +72,24 @@ async function main() {
     ];
 
     for (const s of strategies) {
+        const strat = s as any; // Type assertion for optional fields
         await prisma.strategy.upsert({
             where: { id: s.name.toLowerCase().replace(/\s+/g, '-') }, // stable ID
-            update: { config: s.config },
+            update: { 
+                config: s.config,
+                ...(strat.initialBudget && { initialBudget: strat.initialBudget }),
+                ...(strat.currentBalance && { currentBalance: strat.currentBalance })
+            },
             create: {
                 id: s.name.toLowerCase().replace(/\s+/g, '-'),
                 name: s.name,
                 status: 'ACTIVE',
-                config: s.config
+                config: s.config,
+                initialBudget: strat.initialBudget || 10000,
+                currentBalance: strat.currentBalance || 10000
             }
         });
-        console.log(`   + Upserted: ${s.name}`);
+        console.log(`   + Upserted: ${s.name} (Budget: $${strat.initialBudget || 10000})`);
     }
 
     console.log('✨ Reset & Seed Complete.');
