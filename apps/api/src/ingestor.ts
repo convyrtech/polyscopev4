@@ -99,7 +99,10 @@ export class PolymarketIngestor {
                         // WS events don't have maker_address - use as trigger for HTTP fetch
                         if (e.asset_id) {
                             // Trigger immediate HTTP fetch for this asset to get full trade data
-                            this.fetchTradesForAsset(e.asset_id).catch(() => {});
+                            // [FIX] Log error, don't swallow
+                            this.fetchTradesForAsset(e.asset_id).catch(err =>
+                                console.warn(`⚠️ [Stream A] Trigger Fetch Fail ${e.asset_id}:`, err.message)
+                            );
                         }
                     }
                 }
@@ -167,14 +170,13 @@ export class PolymarketIngestor {
         this.currentAssetIndex += batchSize;
 
         // 2. Fetch Trades for Batch
-        for (const assetId of batch) {
-            // Run in "parallel" but handled in loop to avoid complex Promise.all error handling per item
-            // Actually Promise.allSettled is better but keeping simple for now.
-            // Just fire and forget? No, we await to respect rate limits implicity by single threaded loop time?
-            // No, the setInterval calls this asyncronously.
-            // We just trigger the fetch.
-            this.fetchTradesForAsset(assetId).catch(e => console.warn(`RR Fetch Error ${assetId}:`, e.message));
-        }
+        const promises = batch.map(assetId =>
+            this.fetchTradesForAsset(assetId)
+                .catch(e => console.warn(`⚠️ [Stream B] RR Fetch Error ${assetId}:`, e.message))
+        );
+
+        // [FIX] Wait for batch to complete to prevent runaway promises/rate-limit
+        await Promise.allSettled(promises);
     }
 
     private async fetchTradesForAsset(assetId: string) {
@@ -203,7 +205,7 @@ export class PolymarketIngestor {
             for (const trade of sortedTrades) {
                 try {
                     await this.processDetectiveTrade(trade);
-                    
+
                     // [FIX] Convert DataApiTrade to MarketTradeInput format
                     // onMarketTrade expects marketSlug, not slug
                     const marketTradeInput = {
@@ -214,7 +216,7 @@ export class PolymarketIngestor {
                         actorAddress: trade.maker_address || trade.owner || trade.proxyWallet,
                         timestamp: trade.timestamp
                     };
-                    
+
                     // [LIVE MONITORING] Check TP/SL for open positions
                     await this.paperTradingService.onMarketTrade(marketTradeInput);
                 } catch (tradeError: any) {
@@ -293,7 +295,7 @@ export class PolymarketIngestor {
         // ====================================================================
         const minForAnalysis = INGESTOR_CONFIG.MIN_TRADE_AMOUNT_USD; // 500
         const minForRecord = INGESTOR_CONFIG.MIN_SIGNAL_TRADE_AMOUNT; // 100
-        
+
         if (volumeUSD < minForRecord) {
             return; // Skip entirely - too small to care
         }
@@ -323,7 +325,7 @@ export class PolymarketIngestor {
                 toDelete.forEach(key => this.marketCache.delete(key));
                 console.log(`🧹 [Ingestor] Pruned ${toDelete.length} old market cache entries (${this.marketCache.size} remaining)`);
             }
-            
+
             this.marketCache.set(assetId, {
                 slug: trade.slug,
                 question: trade.title || '',
@@ -494,7 +496,7 @@ export class PolymarketIngestor {
 
             if (strategyResult.action === 'BET') {
                 betName = strategyResult.strategy;
-                
+
                 // ================================================================
                 // KELLY WIN PROBABILITY CALCULATION (Fixed!)
                 // ================================================================
@@ -511,16 +513,16 @@ export class PolymarketIngestor {
                 // More conservative: Use market price as base, boost by aiScore
                 const marketImpliedProb = price; // 0.0 - 1.0
                 const aiConfidence = aiScore / 100; // 0.0 - 1.0
-                
+
                 // Our estimated probability: market says X%, we think whale adds edge
                 // If aiScore is 100, we believe there's a 20% edge over market
                 // If aiScore is 50, minimal edge (5%)
                 const maxEdge = 0.20; // Maximum 20% edge we believe exists
                 const edgeBoost = aiConfidence * maxEdge;
-                
+
                 // winProb = min(0.95, marketProb + edge)
                 const winProb = Math.min(0.95, marketImpliedProb + edgeBoost);
-                
+
                 // Odds for Kelly: If market price is 0.40, payout on win = 1/0.40 = 2.5x
                 const odds = price > 0 ? (1 / price) : 0;
 
@@ -531,7 +533,7 @@ export class PolymarketIngestor {
                     marketSlug
                 );
 
-                console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (MarketProb: ${(marketImpliedProb*100).toFixed(0)}% + Edge: ${(edgeBoost*100).toFixed(0)}% = WinProb: ${(winProb*100).toFixed(0)}%)`);
+                console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (MarketProb: ${(marketImpliedProb * 100).toFixed(0)}% + Edge: ${(edgeBoost * 100).toFixed(0)}% = WinProb: ${(winProb * 100).toFixed(0)}%)`);
             }
 
             // ================================================================
@@ -565,7 +567,7 @@ export class PolymarketIngestor {
             // - Whale can front-run, retail cannot
             // - 100% of recent "profitable" trades were on these garbage markets
             // ================================================================
-            const isGamblingMarket = BANNED_MARKET_PATTERNS.some(pattern => 
+            const isGamblingMarket = BANNED_MARKET_PATTERNS.some(pattern =>
                 marketSlug.toLowerCase().includes(pattern)
             );
             if (isGamblingMarket) {
@@ -574,7 +576,7 @@ export class PolymarketIngestor {
             }
 
             // Note: We do NOT mutate the trade object. Instead, we pass resolved metadata to PaperTradingService via onSignal.
-            
+
             // Ensure conditionId is defined for signal creation
             const finalConditionId = conditionId || assetId;
             // assetId IS the tokenId (YES/NO token) for order book lookups
@@ -585,7 +587,10 @@ export class PolymarketIngestor {
                 signal = await prisma.signal.create({
                     data: {
                         txHash: uniqueId,
-                        timestamp: new Date(Number(trade.timestamp) * 1000),
+                        // [FIX] Timestamp magnitude check (seconds vs ms)
+                        timestamp: new Date(Number(trade.timestamp) > 1e12
+                            ? Number(trade.timestamp)
+                            : Number(trade.timestamp) * 1000),
                         marketSlug: marketSlug,
                         conditionId: finalConditionId,
                         tokenId: tokenId,
@@ -846,7 +851,7 @@ export class PolymarketIngestor {
                 const combined = Array.from(new Set([...existing, ...discoveredMarketSlugs]));
                 this.eventMap.set(slug, combined);
                 console.log(`🗺️ [Ingestor] Mapped '${slug}' (${isEvent ? 'Event' : 'Market'}) to ${combined.length} markets:`, combined);
-                
+
                 // [MEMORY PROTECTION] Prune eventMap if too large
                 if (this.eventMap.size > this.MAX_EVENT_MAP_SIZE) {
                     const toDelete = Array.from(this.eventMap.keys()).slice(0, Math.floor(this.MAX_EVENT_MAP_SIZE * 0.2));
@@ -993,7 +998,7 @@ export class PolymarketIngestor {
     // =========================================================================
     // 🛑 GRACEFUL SHUTDOWN
     // =========================================================================
-    
+
     /**
      * Gracefully stop all ingestor services
      * Call this on SIGTERM/SIGINT to prevent resource leaks
@@ -1003,7 +1008,7 @@ export class PolymarketIngestor {
             console.log('⚠️ [Ingestor] Already shutting down...');
             return;
         }
-        
+
         this.isShuttingDown = true;
         console.log('🛑 [Ingestor] Graceful shutdown initiated...');
 

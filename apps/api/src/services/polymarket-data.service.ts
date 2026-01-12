@@ -15,8 +15,8 @@
 import logger from '../lib/logger';
 import { withRetry } from '../lib/retry';
 import { MS_PER_MINUTE } from '../lib/constants';
-import { 
-    ClosedPositionsResponseSchema, 
+import {
+    ClosedPositionsResponseSchema,
     LeaderboardResponseSchema,
     parseApiResponse,
     type ClosedPosition,
@@ -25,27 +25,10 @@ import {
 
 const BASE_URL = 'https://data-api.polymarket.com';
 
-// Cache to respect rate limits
-const statsCache = new Map<string, { data: ReliableStats; timestamp: number }>();
+
+// Removed global cache/interval to prevent memory leaks
+
 const CACHE_TTL = 5 * MS_PER_MINUTE; // 5 minutes
-
-// Auto-cleanup stale cache entries every 5 minutes
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [key, value] of statsCache) {
-        if (now - value.timestamp > CACHE_TTL) {
-            statsCache.delete(key);
-            cleaned++;
-        }
-    }
-    if (cleaned > 0) {
-        logger.debug(`[PolymarketData] Cleaned ${cleaned} stale cache entries`);
-    }
-}, CACHE_TTL);
-
-// Re-export types for backward compatibility
-export type { ClosedPosition, LeaderboardEntry };
 
 export interface ReliableStats {
     address: string;
@@ -63,6 +46,8 @@ export interface ReliableStats {
 
 class PolymarketDataService {
     private static instance: PolymarketDataService;
+    private statsCache: Map<string, { data: ReliableStats; timestamp: number }>;
+    private cleanupInterval: NodeJS.Timeout;
 
     public static getInstance(): PolymarketDataService {
         if (!PolymarketDataService.instance) {
@@ -72,7 +57,23 @@ class PolymarketDataService {
     }
 
     private constructor() {
+        this.statsCache = new Map();
         logger.info('📊 [PolymarketData] Service Initialized');
+
+        // Auto-cleanup stale cache entries every 5 minutes
+        this.cleanupInterval = setInterval(() => {
+            const now = Date.now();
+            let cleaned = 0;
+            for (const [key, value] of this.statsCache) {
+                if (now - value.timestamp > CACHE_TTL) {
+                    this.statsCache.delete(key);
+                    cleaned++;
+                }
+            }
+            if (cleaned > 0) {
+                logger.debug(`[PolymarketData] Cleaned ${cleaned} stale cache entries`);
+            }
+        }, CACHE_TTL);
     }
 
     /**
@@ -83,7 +84,7 @@ class PolymarketDataService {
         const normalizedAddress = address.toLowerCase();
 
         // Check cache first
-        const cached = statsCache.get(normalizedAddress);
+        const cached = this.statsCache.get(normalizedAddress);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
             logger.debug(`[PolymarketData] Cache hit for ${normalizedAddress.substring(0, 10)}...`);
             return cached.data;
@@ -115,8 +116,8 @@ class PolymarketDataService {
 
             // Validate response with Zod
             const positions = parseApiResponse(
-                ClosedPositionsResponseSchema, 
-                rawPositions, 
+                ClosedPositionsResponseSchema,
+                rawPositions,
                 'ClosedPositions'
             );
 
@@ -154,7 +155,7 @@ class PolymarketDataService {
             };
 
             // Cache result
-            statsCache.set(normalizedAddress, { data: stats, timestamp: Date.now() });
+            this.statsCache.set(normalizedAddress, { data: stats, timestamp: Date.now() });
 
             logger.info(`[PolymarketData] ${normalizedAddress.substring(0, 10)}... | Trades=${closedTrades} WR=${winrate.toFixed(1)}% PnL=$${realizedPnL.toFixed(2)}`);
 
@@ -209,14 +210,14 @@ class PolymarketDataService {
      * Clear cache for an address (call after whale makes new trade)
      */
     public clearCache(address: string): void {
-        statsCache.delete(address.toLowerCase());
+        this.statsCache.delete(address.toLowerCase());
     }
 
     /**
      * Clear entire cache
      */
     public clearAllCache(): void {
-        statsCache.clear();
+        this.statsCache.clear();
     }
 
     private emptyStats(address: string): ReliableStats {
