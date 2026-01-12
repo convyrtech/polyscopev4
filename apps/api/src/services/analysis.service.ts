@@ -8,6 +8,24 @@ import logger from '../lib/logger';
 import { SyndicateService } from './syndicate.service';
 import { fundingService, FundingAnalysis } from './funding.service';
 import { polymarketDataService, ReliableStats } from './polymarket-data.service';
+import {
+    MIN_TRADE_AMOUNT_USD,
+    SNIPER_WINRATE_THRESHOLD,
+    LOSER_WINRATE_THRESHOLD,
+    SHARK_PNL_THRESHOLD,
+    FRESH_WALLET_VOLUME_THRESHOLD,
+    WASH_TRADER_MIN_VOLUME,
+    WASH_TRADER_MAX_ROI,
+    SPAMMER_MIN_TRADES,
+    VOLUME_SCORE_THRESHOLDS,
+    PROVEN_WEIGHTS,
+    FRESH_WEIGHTS,
+    UNKNOWN_WEIGHTS,
+    FOMO_PRICE_THRESHOLD,
+    SMART_ENTRY_THRESHOLD,
+    PANIC_SELL_THRESHOLD,
+    WHALE_EXIT_THRESHOLD
+} from '../lib/constants';
 
 const syndicateService = SyndicateService.getInstance();
 
@@ -35,33 +53,14 @@ export interface TradeData {
 }
 
 // ============================================================================
-// THRESHOLDS (Unified constants)
+// LOCAL CONSTANTS (Not worth exporting - internal logic only)
 // ============================================================================
-const MIN_TRADE_AMOUNT = 500;
-const SNIPER_WINRATE = 65;
-const LOSER_WINRATE = 40;
 const MIN_TRADES_FOR_EVAL = 10;
-const SHARK_PNL_THRESHOLD = 10000;
 const FRESH_WALLET_MAX_TRADES = 3;
-const FRESH_WALLET_VOLUME_THRESHOLD = 2000;
-
-// Anti-bot thresholds
-// WASH TRADER: High volume but near-zero profit (market making bots)
-// ROI is a decimal (0.02 = 2%), not percent
-const WASH_TRADER_MIN_VOLUME = 100000;
-const WASH_TRADER_MAX_ROI = 0.02; // 2% ROI threshold (was incorrectly 2 = 200%)
-
-// SPAMMER: Many tiny trades (dust attack bots)
-const SPAMMER_MIN_TRADES = 50;
 const SPAMMER_MAX_AVG_BET = 10;
 
-// Sports keywords for market classification
-const SPORTS_KEYWORDS = [
-    'nba', 'nfl', 'mlb', 'nhl', 'ufc', 'premier-league', 'la-liga', 
-    'champions-league', 'world-cup', 'super-bowl', 'boxing', 'mma', 
-    'tennis', 'golf', 'formula-1', 'f1', 'cricket', 'rugby',
-    'basketball', 'football', 'soccer', 'hockey', 'baseball'
-];
+// Import centralized SPORTS_KEYWORDS from constants
+import { SPORTS_KEYWORDS } from '../lib/constants';
 
 export class AnalysisService {
     private isSportsMarket(slug: string): boolean {
@@ -98,12 +97,22 @@ export class AnalysisService {
         // ====================================================================
         // KILL SWITCH 1: LIQUIDITY GATE
         // ====================================================================
-        if (trade.amountUSD < MIN_TRADE_AMOUNT) {
+        if (trade.amountUSD < MIN_TRADE_AMOUNT_USD) {
             return 0;
         }
 
         // ====================================================================
-        // KILL SWITCH 2: SPORTS FILTER
+        // KILL SWITCH 2: FOMO CHASER FILTER (Added 2025-01-25)
+        // Problem: Buying at 0.95+ is FOMO - whale is chasing certainty
+        // Math: ROI at price 0.99 = +1% win / -100% loss = SUICIDE
+        // ====================================================================
+        if (trade.side === 'BUY' && trade.price >= FOMO_PRICE_THRESHOLD) {
+            logger.info(`🤡 [Alpha] FOMO KILL: BUY at price ${trade.price.toFixed(3)} >= ${FOMO_PRICE_THRESHOLD} | ${marketSlug.substring(0, 30)}`);
+            return 0;
+        }
+
+        // ====================================================================
+        // KILL SWITCH 3: SPORTS FILTER
         // ====================================================================
         if (this.isSportsMarket(marketSlug)) {
             const isSyndicate = await syndicateService.isSyndicateMove(marketSlug);
@@ -162,13 +171,13 @@ export class AnalysisService {
 
         if (realStats && realStats.isReliable) {
             // HAMSTER KILL SWITCH: Ignore losers regardless of volume
-            if (realStats.winrate < LOSER_WINRATE) {
+            if (realStats.winrate < LOSER_WINRATE_THRESHOLD) {
                 logger.info(`🐹 [Alpha] HAMSTER KILL: ${whaleAddress?.substring(0, 10)}... WR=${realStats.winrate.toFixed(1)}% (${realStats.closedTrades} closed) | $${trade.amountUSD.toFixed(0)} IGNORED`);
                 return 0;
             }
 
             // SNIPER: High winrate = proven winner
-            if (realStats.winrate >= SNIPER_WINRATE) {
+            if (realStats.winrate >= SNIPER_WINRATE_THRESHOLD) {
                 performanceScore = 100;
                 performanceStatus = 'PROVEN';
             }
@@ -218,14 +227,13 @@ export class AnalysisService {
         // ====================================================================
         // STEP 2C: VOLUME SIGNAL (The Conviction)
         // ====================================================================
-        let volumeScore = 40; // Base
-
-        if (trade.amountUSD >= 50000) volumeScore = 100;
-        else if (trade.amountUSD >= 20000) volumeScore = 90;
-        else if (trade.amountUSD >= 10000) volumeScore = 80;
-        else if (trade.amountUSD >= 5000) volumeScore = 70;
-        else if (trade.amountUSD >= 2000) volumeScore = 60;
-        else if (trade.amountUSD >= 1000) volumeScore = 50;
+        let volumeScore = VOLUME_SCORE_THRESHOLDS[VOLUME_SCORE_THRESHOLDS.length - 1].score; // Base
+        for (const tier of VOLUME_SCORE_THRESHOLDS) {
+            if (trade.amountUSD >= tier.minUSD) {
+                volumeScore = tier.score;
+                break;
+            }
+        }
 
         // ====================================================================
         // STEP 3: FINAL WEIGHTED LOGIC (The Alpha Matrix)
@@ -235,20 +243,22 @@ export class AnalysisService {
 
         if (performanceStatus === 'PROVEN') {
             // TRUST THE WHALE - Performance is king
-            // Weight: 60% Performance + 25% Insider + 15% Volume
-            finalScore = (performanceScore * 0.60) + (insiderScore * 0.25) + (volumeScore * 0.15);
+            finalScore = (performanceScore * PROVEN_WEIGHTS.performance) + 
+                         (insiderScore * PROVEN_WEIGHTS.insider) + 
+                         (volumeScore * PROVEN_WEIGHTS.volume);
             mode = 'PROVEN';
         } 
         else if (isFreshWallet) {
             // FRESH WALLET - Trust Funding + Volume
-            // Weight: 50% Insider + 50% Volume
-            finalScore = (insiderScore * 0.50) + (volumeScore * 0.50);
+            finalScore = (insiderScore * FRESH_WEIGHTS.insider) + 
+                         (volumeScore * FRESH_WEIGHTS.volume);
             mode = 'FRESH';
         }
         else {
             // UNKNOWN - Balanced approach
-            // Weight: 30% Performance + 35% Insider + 35% Volume
-            finalScore = (performanceScore * 0.30) + (insiderScore * 0.35) + (volumeScore * 0.35);
+            finalScore = (performanceScore * UNKNOWN_WEIGHTS.performance) + 
+                         (insiderScore * UNKNOWN_WEIGHTS.insider) + 
+                         (volumeScore * UNKNOWN_WEIGHTS.volume);
             mode = 'UNKNOWN';
         }
 
@@ -290,11 +300,11 @@ export class AnalysisService {
 
     classifyTrade(trade: TradeData): TradePattern {
         if (trade.side === 'BUY') {
-            if (trade.price > 0.90) return TradePattern.FOMO_CHASE;
-            if (trade.price < 0.10) return TradePattern.SMART_ENTRY;
+            if (trade.price > FOMO_PRICE_THRESHOLD) return TradePattern.FOMO_CHASE;
+            if (trade.price < SMART_ENTRY_THRESHOLD) return TradePattern.SMART_ENTRY;
         } else {
-            if (trade.price < 0.30) return TradePattern.PANIC_SELL;
-            if (trade.price > 0.70) return TradePattern.WHALE_EXIT;
+            if (trade.price < PANIC_SELL_THRESHOLD) return TradePattern.PANIC_SELL;
+            if (trade.price > WHALE_EXIT_THRESHOLD) return TradePattern.WHALE_EXIT;
         }
         return TradePattern.NORMAL;
     }

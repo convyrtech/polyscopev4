@@ -16,17 +16,28 @@ import { Alchemy, Network, AssetTransfersCategory, SortingOrder } from 'alchemy-
 import { prisma } from '@whalescope/db';
 import { KNOWN_ADDRESSES, lookupAddress, KnownAddress } from '../data/known-addresses';
 import logger from '../lib/logger';
+import { MS_PER_HOUR, MS_PER_DAY } from '../lib/constants';
 
-// Alchemy SDK Configuration
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-if (!ALCHEMY_API_KEY) {
-    logger.warn('[FundingService] ALCHEMY_API_KEY not set - funding analysis will be disabled');
+// Lazy Alchemy initialization - allows dotenv to load first
+let _alchemy: Alchemy | null = null;
+let _alchemyInitialized = false;
+
+function getAlchemy(): Alchemy | null {
+    if (!_alchemyInitialized) {
+        _alchemyInitialized = true;
+        const apiKey = process.env.ALCHEMY_API_KEY;
+        if (!apiKey) {
+            logger.warn('[FundingService] ALCHEMY_API_KEY not set - funding analysis will be disabled');
+        } else {
+            _alchemy = new Alchemy({
+                apiKey,
+                network: Network.MATIC_MAINNET, // Polygon
+            });
+            logger.info('[FundingService] Alchemy SDK initialized');
+        }
+    }
+    return _alchemy;
 }
-
-const alchemy = ALCHEMY_API_KEY ? new Alchemy({
-    apiKey: ALCHEMY_API_KEY,
-    network: Network.MATIC_MAINNET, // Polygon
-}) : null;
 
 export interface FundingAnalysis {
     primarySource: string | null;      // Address of primary funding source
@@ -41,7 +52,7 @@ export interface FundingAnalysis {
 export class FundingService {
     private static instance: FundingService;
     private analysisCache: Map<string, { result: FundingAnalysis; timestamp: number }> = new Map();
-    private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+    private readonly CACHE_TTL = MS_PER_DAY; // 24 hours
     private readonly MAX_TRANSFERS_TO_ANALYZE = 100;
     private cleanupInterval: NodeJS.Timeout | null = null;
 
@@ -59,7 +70,7 @@ export class FundingService {
             if (cleaned > 0) {
                 logger.debug(`[Funding] Cleaned ${cleaned} stale cache entries`);
             }
-        }, 60 * 60 * 1000); // Every hour
+        }, MS_PER_HOUR); // Every hour
     }
 
     static getInstance(): FundingService {
@@ -127,6 +138,9 @@ export class FundingService {
      * Perform the actual Alchemy API analysis
      */
     private async performAlchemyAnalysis(address: string): Promise<FundingAnalysis> {
+        // Lazy init Alchemy
+        const alchemy = getAlchemy();
+        
         // If Alchemy is not configured, return unknown
         if (!alchemy) {
             return {

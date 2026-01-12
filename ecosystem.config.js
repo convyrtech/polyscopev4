@@ -1,5 +1,8 @@
 // PM2 Ecosystem Configuration
 // Run with: pm2 start ecosystem.config.js
+//
+// NOTE: Secrets should be in .env file, loaded by app at runtime via dotenv
+// PM2 env vars are just fallbacks/defaults
 
 module.exports = {
     apps: [
@@ -11,10 +14,13 @@ module.exports = {
             exec_mode: 'fork',
             watch: false,
             
-            // Environment
+            // Environment - app loads secrets from .env via dotenv
+            // These are just defaults that can be overridden
             env: {
                 NODE_ENV: 'production',
                 PORT: 3001,
+                // ALCHEMY_API_KEY loaded from .env by app
+                // DATABASE_URL loaded from .env by app
             },
             
             // Memory Management
@@ -41,8 +47,9 @@ module.exports = {
         {
             name: 'whalescope-web',
             cwd: './apps/web',
-            script: 'node_modules/.bin/next',
-            args: 'start',
+            script: 'npx',
+            args: 'next start -p 3000',
+            interpreter: 'none',
             instances: 1,
             exec_mode: 'fork',
             watch: false,

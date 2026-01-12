@@ -1,13 +1,16 @@
+import { config } from 'dotenv'
+import path from 'path'
+
+// Load .env from project root (2 levels up from apps/api/dist)
+config({ path: path.resolve(__dirname, '../../../.env') });
+
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { WebSocketServer } from 'ws'
 import { PolymarketIngestor } from './ingestor'
-import { config } from 'dotenv'
 import { prisma } from '@whalescope/db'
 import { cors } from 'hono/cors'
 import { fundingService } from './services/funding.service'
-
-config(); // Load env
 
 // ============================================================================
 // ENVIRONMENT VALIDATION - Fail fast if required vars are missing
@@ -96,8 +99,12 @@ const ingestor = new PolymarketIngestor();
 const resolver = new ResolutionService();
 
 import { strategies } from './routes/strategies';
-app.route('/api/strategies', strategies);
+import { monitoring } from './routes/monitoring';
+import { experiments } from './routes/experiments';
 
+app.route('/api/strategies', strategies);
+app.route('/api/monitoring', monitoring);
+app.route('/api/experiments', experiments);
 
 // Start Ingestion Service (Non-blocking)
 ingestor.start().catch(err => {
@@ -105,7 +112,7 @@ ingestor.start().catch(err => {
 });
 
 // Start Resolution Service (Loop every 10m)
-setInterval(() => {
+const resolutionInterval = setInterval(() => {
   resolver.resolveSignals().catch(err => console.error("Resolution Error:", err));
 }, 10 * 60 * 1000); // 10 minutes
 
@@ -585,6 +592,9 @@ async function gracefulShutdown(signal: string) {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   
   try {
+    // Stop resolution interval
+    clearInterval(resolutionInterval);
+    
     // Stop ingestor (WebSocket, intervals, caches)
     await ingestor.stop();
     

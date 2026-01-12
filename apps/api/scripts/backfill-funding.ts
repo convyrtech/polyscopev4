@@ -10,6 +10,10 @@
  * Run from: apps/api directory
  */
 
+import { config } from 'dotenv';
+import path from 'path';
+config({ path: path.resolve(__dirname, '../../../.env') }); // Load env from root
+
 import { PrismaClient } from '@prisma/client';
 import { fundingService } from '../src/services/funding.service';
 

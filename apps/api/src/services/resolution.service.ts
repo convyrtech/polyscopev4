@@ -43,28 +43,132 @@ export class ResolutionService {
             });
 
             if (!res.data || res.data.length === 0) {
-                // console.warn(`⚖️ [Judge] Market/Event not found for slug: ${slug}`);
                 return;
             }
 
             // Events API returns an array. The market is inside the event.
-            // Simplified: We look for the market object within the event that matches our context,
-            // or if it's a single market event, just take the first market.
             const event = res.data[0];
             const market = event.markets ? event.markets[0] : null;
 
             if (!market) return;
 
+            // ================================================================
+            // CONSTANTS FOR FLOAT COMPARISON
+            // ================================================================
+            const PRICE_EPSILON = 0.001;  // For detecting 1.0 or 0.0
+            const VOID_EPSILON = 0.05;    // For detecting 0.5/0.5 (refund)
 
-            if (market.resolved) {
+            // ================================================================
+            // PARSE MARKET DATA
+            // ================================================================
+
+            // Parse outcomes array - format is "[\"Up\", \"Down\"]" or "[\"Yes\", \"No\"]"
+            let outcomes: string[] = [];
+            if (market.outcomes) {
+                try {
+                    outcomes = typeof market.outcomes === 'string'
+                        ? JSON.parse(market.outcomes)
+                        : market.outcomes;
+                } catch (e) {
+                    outcomes = ['Yes', 'No'];
+                }
+            }
+
+            // Parse outcome prices - format is "[\"0.5\", \"0.5\"]" or "[\"1\", \"0\"]"
+            let prices: number[] = [];
+            if (market.outcomePrices) {
+                try {
+                    const parsed = typeof market.outcomePrices === 'string'
+                        ? JSON.parse(market.outcomePrices)
+                        : market.outcomePrices;
+                    if (Array.isArray(parsed) && parsed.length >= 2) {
+                        prices = parsed.map((p: string | number) => parseFloat(String(p)));
+                    }
+                } catch (e) {
+                    // Ignore parse errors
+                }
+            }
+
+            // ================================================================
+            // HELPER FUNCTIONS
+            // ================================================================
+            const isNearOne = (p: number) => Math.abs(p - 1.0) < PRICE_EPSILON;
+            const isNearZero = (p: number) => Math.abs(p - 0.0) < PRICE_EPSILON;
+            const isVoidResolution = (priceArr: number[]): boolean => {
+                // Both prices near 0.5 = refund scenario (market cancelled/voided)
+                // STRICT CHECK: Only applies to binary markets (length === 2)
+                return priceArr.length === 2 &&
+                    Math.abs(priceArr[0] - 0.5) < VOID_EPSILON &&
+                    Math.abs(priceArr[1] - 0.5) < VOID_EPSILON;
+            };
+
+            // ================================================================
+            // PRIORITY 1: EXPLICIT RESOLUTION (resolved: true)
+            // ================================================================
+            if (market.resolved === true) {
                 const winningOutcome = this.getWinningOutcome(market);
 
                 if (winningOutcome) {
+                    console.log(`⚖️ [Judge] ${slug} RESOLVED (explicit) → Winner: "${winningOutcome}"`);
                     await this.settleSignals(slug, winningOutcome);
                 } else {
-                    console.warn(`⚖️ [Judge] ${slug} is resolved but winner is ambiguous. UMA: ${market.uma_resolution_result}`);
+                    console.warn(`⚖️ [Judge] ${slug} resolved but winner ambiguous. UMA: ${market.uma_resolution_result}`);
                 }
+                return;
             }
+
+            // ================================================================
+            // PRIORITY 2-4: CLOSED MARKET SCENARIOS
+            // ================================================================
+            if (market.closed === true) {
+
+                // PRIORITY 2: VOID/INVALID (both prices ≈ 0.5)
+                // Valid only for Binary markets
+                if (isVoidResolution(prices)) {
+                    console.log(`⚖️ [Judge] ${slug} VOIDED (prices: ${prices}) → Refunding positions`);
+                    await this.settleSignalsAsVoid(slug);
+                    return;
+                }
+
+                // PRIORITY 3: IMPLICIT RESOLUTION (prices ≈ 1/0)
+                if (prices.length >= 2) {
+                    let implicitWinner: string | null = null;
+                    const isBinary = prices.length === 2;
+
+                    // Check for Explicit 1.0 (Works for Binary and Multi-outcome)
+                    for (let i = 0; i < prices.length; i++) {
+                        if (isNearOne(prices[i])) {
+                            implicitWinner = outcomes[i] || (i === 0 ? 'Yes' : 'No');
+                            break;
+                        }
+                    }
+
+                    // If no explicit 1.0 found, check for implicit 0.0 (ONLY for Binary)
+                    if (!implicitWinner && isBinary) {
+                        if (isNearZero(prices[0])) {
+                            // First outcome lost = second outcome won
+                            implicitWinner = outcomes[1] || 'No';
+                        } else if (isNearZero(prices[1])) {
+                            // Second outcome lost = first outcome won
+                            implicitWinner = outcomes[0] || 'Yes';
+                        }
+                    }
+
+                    if (implicitWinner) {
+                        console.log(`⚖️ [Judge] ${slug} IMPLICIT RESOLUTION (prices: ${prices}) → Winner: "${implicitWinner}"`);
+                        await this.settleSignals(slug, implicitWinner);
+                        return;
+                    }
+                }
+
+                // PRIORITY 4: DISPUTED/WAITING (closed but outcome unclear)
+                console.warn(`⚠️ [Judge] ${slug} DISPUTED: Market closed but outcome unclear. Prices: ${prices}. Waiting for oracle.`);
+                // DO NOT SETTLE - position remains OPEN
+                return;
+            }
+
+            // PRIORITY 5: ACTIVE MARKET (closed: false, resolved: false)
+            // Skip silently - market still trading
         } catch (e: any) {
             console.error(`⚖️ [Judge] Error checking ${slug}:`, e.message);
         }
@@ -138,6 +242,38 @@ export class ResolutionService {
         await this.profilerService.profileMarketParticipants(slug);
     }
 
+    /**
+     * Settle signals for a VOID/INVALID market (refund scenario)
+     * Sets status to VOID with 0 ROI (no profit, no loss)
+     */
+    private async settleSignalsAsVoid(slug: string) {
+        console.log(`⚖️ [Judge] Voiding ${slug}. All positions refunded.`);
+
+        const signals = await prisma.signal.findMany({
+            where: { marketSlug: slug, status: 'OPEN' }
+        });
+
+        for (const sig of signals) {
+            // Update Signal to VOID status (no win, no loss)
+            await prisma.signal.update({
+                where: { id: sig.id },
+                data: {
+                    status: 'VOID',
+                    roi: 0  // No profit, no loss
+                }
+            });
+
+            // Note: We don't update whale stats for VOID signals
+            // as they don't represent real trading performance
+        }
+
+        // Settle Paper Trading Positions as VOID (refund)
+        await this.paperTradingService.onMarketVoid(slug);
+
+        // Profile participants (optional for void markets)
+        await this.profilerService.profileMarketParticipants(slug);
+    }
+
     private async updateWhaleStats(address: string, won: boolean, tradeRoi: number) {
         // Fetch current stats
         const whale = await prisma.whale.findUnique({ where: { address } });
@@ -147,12 +283,12 @@ export class ResolutionService {
         // CALCULATE REAL PnL FROM ALL RESOLVED SIGNALS
         // PnL = Sum of (amountUSD * (roi / 100))
         // ================================================================
-        
+
         // Get all resolved signals for this whale
         const resolvedSignals = await prisma.signal.findMany({
-            where: { 
-                whaleAddress: address, 
-                status: { in: ['WON', 'LOST'] } 
+            where: {
+                whaleAddress: address,
+                status: { in: ['WON', 'LOST'] }
             },
             select: { amountUSD: true, roi: true }
         });

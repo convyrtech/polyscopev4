@@ -14,6 +14,7 @@
 
 import logger from '../lib/logger';
 import { withRetry } from '../lib/retry';
+import { MS_PER_MINUTE } from '../lib/constants';
 import { 
     ClosedPositionsResponseSchema, 
     LeaderboardResponseSchema,
@@ -26,7 +27,7 @@ const BASE_URL = 'https://data-api.polymarket.com';
 
 // Cache to respect rate limits
 const statsCache = new Map<string, { data: ReliableStats; timestamp: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 5 * MS_PER_MINUTE; // 5 minutes
 
 // Auto-cleanup stale cache entries every 5 minutes
 setInterval(() => {

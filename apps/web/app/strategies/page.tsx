@@ -115,8 +115,10 @@ export default function StrategyPage() {
         return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
     };
 
-    const getPnLColor = (val: number | null) => {
-        if (!val) return 'text-zinc-500';
+    // PnL color: green=profit, red=loss, yellow=open position (unrealized)
+    const getPnLColor = (val: number | null, isOpen: boolean = false) => {
+        if (!val && val !== 0) return 'text-zinc-500';
+        if (isOpen) return 'text-amber-400'; // Open positions always yellow
         return val > 0 ? 'text-emerald-400' : val < 0 ? 'text-rose-400' : 'text-zinc-300';
     };
 
@@ -272,8 +274,8 @@ export default function StrategyPage() {
                                     <td className="p-4 text-right text-zinc-400">
                                         {p.exitPrice ? `$${p.exitPrice.toFixed(3)}` : '-'}
                                     </td>
-                                    <td className={`p-4 text-right font-bold ${getPnLColor(p.pnl)}`}>
-                                        {p.pnl ? formatCurrency(p.pnl) : '-'}
+                                    <td className={`p-4 text-right font-bold ${getPnLColor(p.pnl, p.status === 'OPEN')}`}>
+                                        {p.pnl !== null ? formatCurrency(p.pnl) : '-'}
                                     </td>
                                     <td className="p-4 text-right">
                                         <span className={`text-xs uppercase ${p.status === 'OPEN' ? 'text-amber-400 animate-pulse' : 'text-zinc-600'}`}>

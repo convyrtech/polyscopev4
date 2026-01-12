@@ -240,14 +240,15 @@ describe('DataApiTradeSchema', () => {
         }
     });
 
-    it('should require id field', () => {
+    it('should allow optional id field (schema has .optional())', () => {
         const noId = {
             price: '0.5',
             size: '100'
         };
 
         const result = DataApiTradeSchema.safeParse(noId);
-        expect(result.success).toBe(false);
+        // id is optional in schema, so this should pass
+        expect(result.success).toBe(true);
     });
 
     it('should handle transactionHash as alternative id', () => {

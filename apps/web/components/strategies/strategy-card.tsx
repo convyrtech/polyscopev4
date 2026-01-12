@@ -23,7 +23,7 @@ export function StrategyCard({ strategy, isSelected, onClick }: StrategyCardProp
     };
 
     const getPnLColor = (val: number | null) => {
-        if (!val) return 'text-zinc-500';
+        if (val === null || val === undefined) return 'text-zinc-500';
         return val > 0 ? 'text-emerald-400' : val < 0 ? 'text-rose-400' : 'text-zinc-300';
     };
 

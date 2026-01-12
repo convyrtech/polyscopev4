@@ -30,7 +30,7 @@ export const INGESTOR_CONFIG = {
     
     // Timing (ms)
     WS_PING_INTERVAL: 20000,
-    POLLING_INTERVAL: 200,
+    POLLING_INTERVAL: 125, // 8 ticks/s × 2 batch = 16 req/s (80% of /trades 20 req/s limit)
     AUTO_DISCOVERY_INTERVAL: 10 * 60 * 1000, // 10 minutes
     WS_RECONNECT_DELAY: 5000,
     
@@ -39,9 +39,15 @@ export const INGESTOR_CONFIG = {
     WS_SUBSCRIBE_LIMIT: 20,
     BACKFILL_LIMIT: 100,
     BACKFILL_ASSETS_MAX: 2,
+    DISCOVERY_MARKET_LIMIT: 50, // Top N markets to scan in auto-discovery
+    FETCH_TRADES_LIMIT: 10, // Trades per asset poll
     
     // Thresholds
     MIN_BACKFILL_SIGNALS: 50,
+    
+    // Retry config
+    MAX_RETRIES: 2,
+    BASE_DELAY_MS: 500,
     
     // URLs
     WS_URL: 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
@@ -104,6 +110,15 @@ export const PAPER_TRADING_CONFIG = {
 export const RESOLUTION_CONFIG = {
     INTERVAL_MS: 10 * 60 * 1000, // 10 minutes
     STALE_THRESHOLD_DAYS: 7,
+} as const;
+
+// ============================================================================
+// API ROUTES
+// ============================================================================
+export const ROUTES_CONFIG = {
+    DEFAULT_POSITIONS_LIMIT: 100,
+    DEFAULT_SIGNALS_LIMIT: 100,
+    MAX_SIGNALS_LIMIT: 500,
 } as const;
 
 // ============================================================================

@@ -56,6 +56,7 @@ model Signal {
   // Market Info
   marketSlug      String
   conditionId     String
+  tokenId         String?  // YES/NO token ID for order book lookups
   outcome         String   // "Yes" / "No"
   
   // Trade Info
@@ -116,10 +117,20 @@ model PaperPosition {
   signalId    String?   // Link to original signal
   marketSlug  String
   outcome     String    // "Yes", "No", "Donald Trump"
+  tokenId     String?   // Polymarket token ID for order book lookups
   
   entryPrice  Float
-  amount      Float     // Position size in USD
-  status      String    @default("OPEN") // OPEN, CLOSED
+  amountUSD   Float     // Position size in USD
+  shares      Float?    // Actual shares purchased after slippage
+  status      String    @default("OPEN") // OPEN, CLOSED_WON, CLOSED_LOST, CLOSED_TP, CLOSED_SL
+  
+  // Cost tracking (Phase 1)
+  entrySlippage   Float?    // Entry slippage cost in USD
+  exitSlippage    Float?    // Exit slippage cost in USD  
+  gasCost         Float?    // Gas cost in USD (entry + exit)
+  latencyMs       Int?      // Simulated reaction latency in ms
+  totalSlippage   Float?    // Total slippage (entry + exit)
+  exitValue       Float?    // Total exit value in USD
   
   exitPrice   Float?
   exitReason  String?   // "TP", "SL", "PANIC", "RESOLVED"

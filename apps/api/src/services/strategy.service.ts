@@ -1,4 +1,12 @@
 // import { Whale } from '@whalescope/db';
+import { 
+    VALIDATION_MAX_RESOLUTION_HOURS,
+    PRICE_FLOOR,
+    PRICE_CEILING,
+    HIGH_CONFIDENCE_SCORE_THRESHOLD,
+    MIN_MARKET_VOLUME_USD,
+    MAX_DAYS_TO_EXPIRY
+} from '../lib/constants';
 
 export enum StrategyType {
     SNIPER = 'SNIPER',
@@ -48,6 +56,14 @@ export class StrategyService {
             return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'KILL SWITCH: Sports Ban' };
         }
 
+        // 2. FAST RESOLUTION FILTER — DISABLED for Data Factory
+        // Now controlled per-strategy in paper-trading.service.ts via config.skipTimeFilter
+        // Keeping code for reference:
+        // if (signal.expiryDate && !skipTimeFilter) {
+        //     const hoursToExpiry = (signal.expiryDate.getTime() - now.getTime()) / (1000 * 3600);
+        //     if (hoursToExpiry > VALIDATION_MAX_RESOLUTION_HOURS) { ... }
+        // }
+
         // =====================================================================
         // 📡 STEP 2: INSIDER RADAR (PolySights Rival)
         // =====================================================================
@@ -83,24 +99,33 @@ export class StrategyService {
         if (signal.expiryDate) {
             const now = new Date();
             const daysToExpiry = (signal.expiryDate.getTime() - now.getTime()) / (1000 * 3600 * 24);
-            if (daysToExpiry > 7) {
-                return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'REALITY: Time Horizon > 7 Days' };
+            if (daysToExpiry > MAX_DAYS_TO_EXPIRY) {
+                return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: `Time Horizon > ${MAX_DAYS_TO_EXPIRY} Days` };
             }
         }
 
-        // 3. Liquidity Filter: Market Volume > $10k
-        if (signal.marketVolume && signal.marketVolume < 10000) {
-            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'REALITY: Low Liquidity' };
+        // 3. Liquidity Filter: Market Volume > MIN_MARKET_VOLUME_USD
+        if (signal.marketVolume && signal.marketVolume < MIN_MARKET_VOLUME_USD) {
+            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: `Low Liquidity (< $${MIN_MARKET_VOLUME_USD})` };
         }
 
-        // 4. Price Floor: < 0.20 (Lottery Tickets)
-        if (signal.price < 0.20) {
-            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'KILL SWITCH: Price < 0.20' };
+        // 4. Price Floor: Smart Filter
+        // LOW price + HIGH whale score = INSIDER OPPORTUNITY (0.05 → 1.0 = 1900% ROI!)
+        // Only skip low prices for low-confidence whales
+        // NOTE: Using whale.score from DB which may be from previous trade.
+        // This is acceptable because reputation is built over time.
+        const whaleScore = whale?.score || 0;
+        if (signal.price < PRICE_FLOOR && whaleScore < HIGH_CONFIDENCE_SCORE_THRESHOLD) {
+            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: `Price < ${PRICE_FLOOR} with low whale score (${whaleScore})` };
+        }
+        // Log when we allow low-price insider signals
+        if (signal.price < PRICE_FLOOR && whaleScore >= HIGH_CONFIDENCE_SCORE_THRESHOLD) {
+            console.log(`🎰 [Strategy] LOW PRICE INSIDER: ${signal.marketSlug} @ ${signal.price.toFixed(2)} with whale score ${whaleScore}`);
         }
 
-        // 5. Price Ceiling: > 0.85 (Low Upside)
-        if (signal.price > 0.85) {
-            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: 'KILL SWITCH: Price > 0.85' };
+        // 5. Price Ceiling (Low Upside)
+        if (signal.price > PRICE_CEILING) {
+            return { strategy: StrategyType.NONE, action: 'SKIP', confidence: 0, reason: `Price > ${PRICE_CEILING} (low upside)` };
         }
 
         // =====================================================================

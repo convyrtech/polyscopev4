@@ -9,6 +9,7 @@ import { SyndicateService } from './services/syndicate.service';
 import { withRetry } from './lib/retry';
 import { DataApiTradeSchema, DataApiTrade, GammaMarket, GammaMarketToken, parseApiResponse } from './lib/schemas';
 import { INGESTOR_CONFIG } from './lib/config';
+import { PRICE_CEILING, BANNED_MARKET_PATTERNS } from './lib/constants';
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const GAMMA_URL = 'https://gamma-api.polymarket.com/markets';
@@ -35,8 +36,8 @@ export class PolymarketIngestor {
     private isConnected = false;
     private marketCache: Map<string, MarketCache> = new Map(); // asset_id -> Info
     private processedTradeIds: Set<string> = new Set(); // Dedup for HTTP
-    private readonly MAX_PROCESSED_IDS = 100000; // Prevent unbounded growth
-    private readonly MAX_EVENT_MAP_SIZE = 1000; // Prevent eventMap unbounded growth
+    private readonly MAX_PROCESSED_IDS = INGESTOR_CONFIG.MAX_PROCESSED_IDS;
+    private readonly MAX_EVENT_MAP_SIZE = INGESTOR_CONFIG.MAX_EVENT_MAP_SIZE;
     private currentAssetIndex = 0; // [NEW] For Round Robin
     private pingInterval: NodeJS.Timeout | null = null; // Prevent interval leaks
     private discoveryInterval: NodeJS.Timeout | null = null; // Auto-discovery interval
@@ -91,10 +92,15 @@ export class PolymarketIngestor {
                 if (msgString.includes("INVALID")) return;
                 const message = JSON.parse(msgString);
 
-                // Broadcast Pulse (Log for now, could be socket.emit)
+                // Process real-time trades from WebSocket
                 const events = Array.isArray(message) ? message : [message];
                 for (const e of events) {
                     if (e.event_type === 'last_trade_price' || e.event_type === 'trade') {
+                        // WS events don't have maker_address - use as trigger for HTTP fetch
+                        if (e.asset_id) {
+                            // Trigger immediate HTTP fetch for this asset to get full trade data
+                            this.fetchTradesForAsset(e.asset_id).catch(() => {});
+                        }
                     }
                 }
             } catch (error) {
@@ -102,8 +108,10 @@ export class PolymarketIngestor {
             }
         });
 
-        this.ws.on('close', () => {
-            setTimeout(() => this.connectWs(), 5000);
+        this.ws.on('close', (code, reason) => {
+            console.warn(`⚠️ [Stream A] WS Closed: code=${code}, reason=${reason?.toString() || 'none'}, reconnecting in ${INGESTOR_CONFIG.WS_RECONNECT_DELAY}ms...`);
+            this.isConnected = false;
+            setTimeout(() => this.connectWs(), INGESTOR_CONFIG.WS_RECONNECT_DELAY);
         });
 
         this.ws.on('error', (err) => console.error('❌ [Stream A] WS Error:', err.message));
@@ -118,7 +126,7 @@ export class PolymarketIngestor {
             if (this.ws?.readyState === WebSocket.OPEN) {
                 this.ws.send(JSON.stringify({ type: 'ping' }));
             }
-        }, 20000);
+        }, INGESTOR_CONFIG.WS_PING_INTERVAL);
     }
 
     private async subscribeToTopMarkets() {
@@ -128,7 +136,7 @@ export class PolymarketIngestor {
         const assetIds = Array.from(this.marketCache.keys());
         if (assetIds.length === 0) return;
 
-        const chunk = assetIds.slice(0, 20); // Subscribe to top 20 for Pulse
+        const chunk = assetIds.slice(0, INGESTOR_CONFIG.WS_SUBSCRIBE_LIMIT);
         this.ws.send(JSON.stringify({ assets_ids: chunk }));
         console.log(`⚡ [Stream A] Subscribed to ${chunk.length} markets for Pulse.`);
     }
@@ -141,9 +149,8 @@ export class PolymarketIngestor {
 
     private startPolling() {
         console.log('🕵️ [Stream B] Starting HTTP Round Robin (The Detective)...');
-        // Tick every 200ms -> Process next batch
-        // 5 requests / sec
-        this.pollingInterval = setInterval(() => this.pollRoundRobin(), 200);
+        // Tick at configured interval -> Process next batch
+        this.pollingInterval = setInterval(() => this.pollRoundRobin(), INGESTOR_CONFIG.POLLING_INTERVAL);
     }
 
     private async pollRoundRobin() {
@@ -151,7 +158,7 @@ export class PolymarketIngestor {
         if (assetIds.length === 0) return;
 
         // 1. Pick Batches
-        const batchSize = 2; // Fetch 2 assets per tick
+        const batchSize = INGESTOR_CONFIG.POLLING_BATCH_SIZE;
         if (this.currentAssetIndex >= assetIds.length) {
             this.currentAssetIndex = 0; // Reset loop
         }
@@ -174,10 +181,10 @@ export class PolymarketIngestor {
         try {
             const response = await withRetry(
                 () => axios.get(TRADE_API_URL, {
-                    params: { asset_id: assetId, limit: 10, sort: 'timestamp' }
+                    params: { asset_id: assetId, limit: INGESTOR_CONFIG.FETCH_TRADES_LIMIT, sort: 'timestamp' }
                 }),
                 `fetchTrades:${assetId.substring(0, 8)}`,
-                { maxRetries: 2, baseDelayMs: 500 }
+                { maxRetries: INGESTOR_CONFIG.MAX_RETRIES, baseDelayMs: INGESTOR_CONFIG.BASE_DELAY_MS }
             );
 
             const rawTrades = response.data;
@@ -196,8 +203,20 @@ export class PolymarketIngestor {
             for (const trade of sortedTrades) {
                 try {
                     await this.processDetectiveTrade(trade);
-                    // [NEW] Live Monitoring for Paper Trading (SL/TP)
-                    await this.paperTradingService.onMarketTrade(trade);
+                    
+                    // [FIX] Convert DataApiTrade to MarketTradeInput format
+                    // onMarketTrade expects marketSlug, not slug
+                    const marketTradeInput = {
+                        marketSlug: trade.slug || trade.eventSlug,
+                        outcome: trade.outcome,
+                        price: trade.price,
+                        side: trade.side,
+                        actorAddress: trade.maker_address || trade.owner || trade.proxyWallet,
+                        timestamp: trade.timestamp
+                    };
+                    
+                    // [LIVE MONITORING] Check TP/SL for open positions
+                    await this.paperTradingService.onMarketTrade(marketTradeInput);
                 } catch (tradeError: any) {
                     console.error(`❌ [Stream B] Trade Processing Error (${trade.id}):`, tradeError.message);
                 }
@@ -213,11 +232,11 @@ export class PolymarketIngestor {
 
     private async startAutoDiscovery() {
         const runDiscovery = async () => {
-            console.log('🔭 [Auto-Discovery] Scanning Top 50 Active Markets...');
+            console.log(`🔭 [Auto-Discovery] Scanning Top ${INGESTOR_CONFIG.DISCOVERY_MARKET_LIMIT} Active Markets...`);
             try {
                 const response = await withRetry(
                     () => axios.get(GAMMA_URL, {
-                        params: { active: true, closed: false, limit: 50, sort: 'volume', ascending: false }
+                        params: { active: true, closed: false, limit: INGESTOR_CONFIG.DISCOVERY_MARKET_LIMIT, sort: 'volume', ascending: false }
                     }),
                     'autoDiscovery',
                     { maxRetries: 2 }
@@ -251,8 +270,8 @@ export class PolymarketIngestor {
         // Run immediately
         await runDiscovery();
 
-        // Schedule every 10 minutes and save reference for cleanup
-        this.discoveryInterval = setInterval(runDiscovery, 10 * 60 * 1000);
+        // Schedule at configured interval and save reference for cleanup
+        this.discoveryInterval = setInterval(runDiscovery, INGESTOR_CONFIG.AUTO_DISCOVERY_INTERVAL);
     }
 
     private async processDetectiveTrade(trade: DataApiTrade) {
@@ -515,10 +534,51 @@ export class PolymarketIngestor {
                 console.log(`🎯 [Strategy] ${betName} triggered! Bet Size: $${betSize} (MarketProb: ${(marketImpliedProb*100).toFixed(0)}% + Edge: ${(edgeBoost*100).toFixed(0)}% = WinProb: ${(winProb*100).toFixed(0)}%)`);
             }
 
+            // ================================================================
+            // [CRITICAL FIX] Skip signal creation if aiScore is 0
+            // aiScore=0 means the trade was killed by filters (sports, hamster, etc.)
+            // Don't pollute DB with zero-score signals
+            // ================================================================
+            if (aiScore === 0) {
+                console.log(`⏭️ [Ingestor] Skipping signal: aiScore=0 (filtered) | ${marketSlug.substring(0, 40)}`);
+                return;
+            }
+
+            // ================================================================
+            // [CRITICAL FIX 2025-01-25] Skip HIGH PRICE signals
+            // Problem: 66% of signals had price >= 0.85 → 91% loss rate!
+            // Reason: At price 0.99, max ROI = +1%, but loss = -100%
+            // This is MATHEMATICALLY IMPOSSIBLE to profit from.
+            // Paper Trading already filters this, but signal pollutes DB & UI.
+            // Uses centralized PRICE_CEILING from lib/constants.ts
+            // ================================================================
+            if (price >= PRICE_CEILING) {
+                console.log(`⏭️ [Ingestor] HIGH PRICE KILL: ${price.toFixed(3)} >= ${PRICE_CEILING} | ${marketSlug.substring(0, 40)}`);
+                return;
+            }
+
+            // ================================================================
+            // [CRITICAL FIX 2025-01-26] Skip 15-min/5-min binary markets (updown)
+            // Problem: These are short-term binary options, NOT real prediction markets.
+            // Reality: 15-min BTC updown = gambling, not copy-tradeable.
+            // - Latency 10-30s makes 15-min markets untradeable
+            // - Whale can front-run, retail cannot
+            // - 100% of recent "profitable" trades were on these garbage markets
+            // ================================================================
+            const isGamblingMarket = BANNED_MARKET_PATTERNS.some(pattern => 
+                marketSlug.toLowerCase().includes(pattern)
+            );
+            if (isGamblingMarket) {
+                console.log(`🚫 [Ingestor] GAMBLING MARKET KILL: ${marketSlug.substring(0, 50)} | Matches banned pattern`);
+                return;
+            }
+
             // Note: We do NOT mutate the trade object. Instead, we pass resolved metadata to PaperTradingService via onSignal.
             
             // Ensure conditionId is defined for signal creation
             const finalConditionId = conditionId || assetId;
+            // assetId IS the tokenId (YES/NO token) for order book lookups
+            const tokenId = assetId;
 
             let signal;
             try {
@@ -528,6 +588,7 @@ export class PolymarketIngestor {
                         timestamp: new Date(Number(trade.timestamp) * 1000),
                         marketSlug: marketSlug,
                         conditionId: finalConditionId,
+                        tokenId: tokenId,
                         outcome: outcome,
                         side: (trade.side || 'BUY').toUpperCase(),
                         price: price,

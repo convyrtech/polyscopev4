@@ -43,7 +43,8 @@ async function main() {
         amountUSD: 1000,
         whaleAddress: TEST_WHALE,
         side: 'BUY',
-        timestamp: new Date()
+        timestamp: new Date(),
+        aiScore: 75  // Required for paper trading
     };
 
     // Trigger Entry

@@ -1,5 +1,6 @@
 import { prisma } from '@whalescope/db';
 import axios from 'axios';
+import { MS_PER_HOUR } from '../lib/constants';
 
 const DATA_API_URL = 'https://data-api.polymarket.com/trades';
 
@@ -66,8 +67,7 @@ export class WhaleService {
 
         if (existing && existing.lastAnalyzed) {
             const diffMs = Date.now() - new Date(existing.lastAnalyzed).getTime();
-            const oneHourMs = 60 * 60 * 1000;
-            if (diffMs < oneHourMs) {
+            if (diffMs < MS_PER_HOUR) {
                 // Buffer period - maybe update lastActive only?
                 return;
             }
